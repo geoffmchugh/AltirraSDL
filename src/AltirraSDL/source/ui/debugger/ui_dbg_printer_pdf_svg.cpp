@@ -130,7 +130,8 @@ bool SavePrinterOutputAsSVG(ATPrinterGraphicalOutput& output, const char *path) 
 	if (output.PreCull(cullInfo, docBounds)) {
 		vdfastvector<ATPrinterGraphicalOutput::RenderColumn> cols;
 		float rawLineY = 0;
-		while (output.ExtractNextLine(cols, rawLineY, cullInfo, docBounds)) {
+		while (output.ExtractNextLineAsDots(cols, rawLineY, cullInfo,
+			docBounds)) {
 			uint32 allDotMask = 0;
 			for (auto& col : cols)
 				allDotMask |= col.mPins;

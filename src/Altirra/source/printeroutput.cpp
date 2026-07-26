@@ -317,8 +317,12 @@ void ATPrinterGraphicalOutput::Clear() {
 	mHeadY = mPageVBorderMM + mHeadFirstBitOffsetY;
 	mpCurrentLine = nullptr;
 
+	// Notify each axis through its matching callback. The test15 snapshot
+	// checked the horizontal callback here but called the vertical callback,
+	// which could invoke an empty function and never report the current X
+	// position.
 	if (mpOnHorizontalMove)
-		mpOnVerticalMove(mHeadX);
+		mpOnHorizontalMove(mHeadX);
 
 	if (mpOnVerticalMove)
 		mpOnVerticalMove(mHeadY);
@@ -405,6 +409,24 @@ uint32 ATPrinterGraphicalOutput::ConvertLinearColorToSrgb(uint32 linear) const {
 	return VDColorRGB(vdfloat32x4::unpacku8(linear) * (1.0f / 65.0f)).LinearToSRGB().ToBGR8();
 }
 
+vdrect32f ATPrinterGraphicalOutput::GetMaxCharBounds() const {
+	// compute horizontal bounds by the max advance of all chars
+	float maxAdvance = 0;
+
+	for(const CharInfo& ci : mCharInfos) {
+		maxAdvance = std::max(maxAdvance, ci.mAdvance);
+	}
+
+	// compute vertical bounds by the union of the head -- we don't look at the
+	// actual patterns for consistency in font metrics
+	return vdrect32f(
+		-mGraphicsSpec.mDotRadiusMM,
+		-((float)(mGraphicsSpec.mNumPins - 1) * mGraphicsSpec.mVerticalDotPitchMM + 2 * mGraphicsSpec.mDotRadiusMM),
+		maxAdvance,
+		0.0f
+	);
+}
+
 bool ATPrinterGraphicalOutput::PreCull(CullInfo& cullInfo, const vdrect32f& r) const {
 	auto itBegin = mLines.begin();
 	auto itLine1 = std::lower_bound(itBegin, mLines.end(), r.top - mHeadHeight, LineCompareY());
@@ -433,7 +455,7 @@ void ATPrinterGraphicalOutput::ExtractNextLineDots(vdfastvector<RenderDot>& rend
 		const uint32 columnIdx = itLine->mColumnStart;
 		const float firstDotY = itLine->mY + mHeadFirstBitOffsetY;
 			
-		// pre-coll pins on the print head -- the tricky part is that the head may be upside-down
+		// pre-cull pins on the print head -- the tricky part is that the head may be upside-down
 		uint32 dotMask = (UINT32_C(2) << (this->mHeadPinCount - 1)) - 1;
 
 		if (mDotStepY > 0) {
@@ -490,29 +512,56 @@ void ATPrinterGraphicalOutput::ExtractNextLineDots(vdfastvector<RenderDot>& rend
 			continue;
 			
 		for(const PrintColumn& column : vdvector_view(mColumns.data() + columnIdx, itLine->mColumnCount)) {
-			if (fabsf(column.mX - viewDocXC) >= viewDocXD + dotRadius)
-				continue;
+			if (column.mDotsOrChar & column.kCharBit) {
+				const CharInfo& ci = mCharInfos[column.mDotsOrChar - column.kCharBit];
 
-			uint32 pins = column.mDots & dotMask;
+				for(const CharColumn& cc : vdspan(mCharColumns).subspan(ci.mDotPatternStart, ci.mDotPatternCount)) {
+					float x = column.mX + cc.mXOffset;
 
-			while(pins) {
-				int idx = VDFindLowestSetBitFast(pins);
-				pins &= (pins - 1);
+					if (fabsf(x - viewDocXC) >= viewDocXD + dotRadius)
+						continue;
 
-				const float dotY = firstDotY + mDotStepY * (float)idx;
+					uint32 pins = cc.mDots & dotMask;
 
-				renderDots.push_back(
-					RenderDot {
-						.mX = column.mX,
-						.mY = dotY,
+					while(pins) {
+						int idx = VDFindLowestSetBitFast(pins);
+						pins &= (pins - 1);
+
+						const float dotY = firstDotY + mDotStepY * (float)idx;
+
+						renderDots.push_back(
+							RenderDot {
+								.mX = x,
+								.mY = dotY,
+							}
+						);
 					}
-				);
+				}
+			} else {
+				if (fabsf(column.mX - viewDocXC) >= viewDocXD + dotRadius)
+					continue;
+
+				uint32 pins = column.mDotsOrChar & dotMask;
+
+				while(pins) {
+					int idx = VDFindLowestSetBitFast(pins);
+					pins &= (pins - 1);
+
+					const float dotY = firstDotY + mDotStepY * (float)idx;
+
+					renderDots.push_back(
+						RenderDot {
+							.mX = column.mX,
+							.mY = dotY,
+						}
+					);
+				}
 			}
 		}
 	}
 }
 
-bool ATPrinterGraphicalOutput::ExtractNextLine(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const {
+bool ATPrinterGraphicalOutput::ExtractNextLineAsDots(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const {
 	renderY = 0;
 	renderColumns.clear();
 
@@ -527,8 +576,54 @@ bool ATPrinterGraphicalOutput::ExtractNextLine(vdfastvector<RenderColumn>& rende
 		renderY = line.mY;
 
 		for(const PrintColumn& col : vdspan(&mColumns[line.mColumnStart], line.mColumnCount)) {
-			if (col.mX >= cullx1 && col.mX <= cullx2)
-				renderColumns.emplace_back(col.mX, col.mDots);
+			if (col.mDotsOrChar & col.kCharBit) {
+				const uint32 ch = col.mDotsOrChar - col.kCharBit;
+
+				const CharInfo& ci = mCharInfos[ch];
+
+				for(const CharColumn& cc : vdspan(mCharColumns).subspan(ci.mDotPatternStart, ci.mDotPatternCount)) {
+					const float cx = col.mX + cc.mXOffset;
+
+					if (cx >= cullx1 && cx <= cullx2)
+						renderColumns.emplace_back(cx, cc.mDots);
+				}
+			} else {
+				if (col.mX >= cullx1 && col.mX <= cullx2)
+					renderColumns.emplace_back(col.mX, col.mDotsOrChar);
+			}
+		}
+
+		if (!renderColumns.empty())
+			return true;
+	}
+
+	return false;
+}
+
+bool ATPrinterGraphicalOutput::ExtractNextLineAsDotsOrChars(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const {
+	renderY = 0;
+	renderColumns.clear();
+
+	const float cullx1 = r.left - mDotRadiusMM * 2;
+	const float cullx2 = r.right;
+
+	while(cullInfo.mLineStart < cullInfo.mLineEnd) {
+		const Line& line = mLines[cullInfo.mLineStart++];
+		if (!line.mColumnCount)
+			continue;
+
+		renderY = line.mY;
+
+		for(const PrintColumn& col : vdspan(&mColumns[line.mColumnStart], line.mColumnCount)) {
+			if (col.mDotsOrChar & col.kCharBit) {
+				float xl = col.mX - mDotRadiusMM;
+
+				if (xl < cullx2 && xl + mCharInfos[col.mDotsOrChar - col.kCharBit].mAdvance > cullx1)
+					renderColumns.emplace_back(col.mX, col.mDotsOrChar);
+			} else {
+				if (col.mX >= cullx1 && col.mX <= cullx2)
+					renderColumns.emplace_back(col.mX, col.mDotsOrChar);
+			}
 		}
 
 		if (!renderColumns.empty())
@@ -615,29 +710,12 @@ void ATPrinterGraphicalOutput::Print(double x, uint32 pins) {
 		return;
 
 	// if no line, establish now
-	if (!mpCurrentLine) {
-		Line newLine {};
-		newLine.mY = mHeadY - mDotRadiusMM;
-		newLine.mColumnStart = (uint32)mColumns.size();
-		newLine.mColumnCount = 0;
-
-		auto itLine = std::lower_bound(
-			mLines.begin(),
-			mLines.end(), 
-			newLine,
-			[](const Line& a, const Line& b) {
-				return a.mY < b.mY;
-			}
-		);
-
-		mpCurrentLine = &*mLines.insert(itLine, newLine);
-	}
+	Line& line = CreateLine();
+	++line.mColumnCount;
 
 	auto& column = mColumns.emplace_back();
 	column.mX = (float)x;
-	column.mDots = pins;
-
-	++mpCurrentLine->mColumnCount;
+	column.mDotsOrChar = pins;
 
 	if (!mbInvalidatedAll) {
 		vdrect32f r;
@@ -657,12 +735,78 @@ void ATPrinterGraphicalOutput::Print(double x, uint32 pins) {
 	}
 }
 
+uint32 ATPrinterGraphicalOutput::DefineChar(double advance, vdspan<const CharColumn> columns, uint32 uniChar) {
+	const uint32 ch = (uint32)mCharInfos.size();
+
+	CharInfo& ci = mCharInfos.emplace_back();
+	ci.mAdvance = advance;
+	ci.mDotPatternStart = (uint32)mCharColumns.size();
+	ci.mDotPatternCount = columns.size();
+	ci.mUnicodeChar = uniChar;
+
+	mCharColumns.append_range(columns);
+
+	return ch;
+}
+
+float ATPrinterGraphicalOutput::GetCharAdvance(uint32 ch) const {
+	return ch >= mCharInfos.size() ? 0.0f : mCharInfos[ch].mAdvance;
+}
+
+uint32 ATPrinterGraphicalOutput::GetCharUnicodeChar(uint32 ch) const {
+	return ch >= mCharInfos.size() ? 0 : mCharInfos[ch].mUnicodeChar;
+}
+
+vdspan<const ATPrinterGraphicalOutput::CharColumn> ATPrinterGraphicalOutput::GetCharColumns(uint32 ch) const {
+	if (ch >= mCharInfos.size())
+		return {};
+
+	const CharInfo& ci = mCharInfos[ch];
+
+	return vdspan(mCharColumns).subspan(ci.mDotPatternStart, ci.mDotPatternCount);
+}
+
+void ATPrinterGraphicalOutput::PrintChar(double x, uint32 ch) {
+	if (ch >= mCharInfos.size()) {
+		VDFAIL("Invalid character index");
+		return;
+	}
+
+	const CharInfo& ci = mCharInfos[ch];
+	Line& line = CreateLine();
+	++line.mColumnCount;
+
+	auto& column = mColumns.emplace_back();
+	column.mX = (float)x;
+	column.mDotsOrChar = ch + column.kCharBit;
+
+	if (ci.mDotPatternCount && !mbInvalidatedAll) {
+		vdrect32f r;
+		r.left = x - mDotRadiusMM;
+		r.top = mHeadY - mDotRadiusMM;
+		r.right = x + ci.mAdvance + mDotRadiusMM;
+		r.bottom = r.top + mHeadHeight;
+
+		Invalidate(r);
+	}
+
+	x += ci.mAdvance;
+
+	if (mHeadX != x) {
+		mHeadX = x;
+
+		if (mpOnHorizontalMove)
+			mpOnHorizontalMove(x);
+	}
+}
+
 void ATPrinterGraphicalOutput::MoveVector(const vddouble2& pt) {
 	const double newY = pt.y + mHeadY;
 
 	// adjust head vertical position
 	if (mHeadY != newY) {
 		mHeadY = newY;
+		mpCurrentLine = nullptr;
 
 		if (mpOnVerticalMove)
 			mpOnVerticalMove(mHeadY);
@@ -761,6 +905,28 @@ void ATPrinterGraphicalOutput::ChangePenColor(uint32 color) {
 
 uint32 ATPrinterGraphicalOutput::ConvertColor(uint32 srgb) const {
 	return nsVDVecMath::packus8(vdfloat32x3(VDColorRGB::FromBGR8(srgb).SRGBToLinear()) * 64.0f) & 0xFFFFFF;
+}
+
+ATPrinterGraphicalOutput::Line& ATPrinterGraphicalOutput::CreateLine() {
+	if (!mpCurrentLine) {
+		Line newLine {};
+		newLine.mY = mHeadY - mDotRadiusMM;
+		newLine.mColumnStart = (uint32)mColumns.size();
+		newLine.mColumnCount = 0;
+
+		auto itLine = std::lower_bound(
+			mLines.begin(),
+			mLines.end(),
+			newLine,
+			[](const Line& a, const Line& b) {
+				return a.mY < b.mY;
+			}
+		);
+
+		mpCurrentLine = &*mLines.insert(itLine, newLine);
+	}
+
+	return *mpCurrentLine;
 }
 
 size_t ATPrinterGraphicalOutput::HashVectorTile(sint32 tileX, sint32 tileY) const {

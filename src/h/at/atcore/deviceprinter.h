@@ -53,6 +53,9 @@ struct ATPrinterGraphicsSpec {
 	// and is used to nicely position the paper at start.
 	float mPageVBorderMM;
 
+	// Left margin horizontal position during normal printing.
+	float mLeftMarginMM;
+
 	// Radius of a printed dot, in millimeters.
 	float mDotRadiusMM;
 
@@ -85,6 +88,44 @@ public:
 	// Print dots in a column at the specified X position in millimeters from
 	// the left edge of the page.
 	virtual void Print(double x, uint32 dots) = 0;
+
+	struct CharColumn {
+		// Dot pattern for print column.
+		uint32 mDots;
+
+		// X offset from left edge of character, in millimeters. By convention,
+		// the left-most position is 0, which places dots tangent to the left
+		// edge of the character cell.
+		float mXOffset;
+	};
+
+	// Define a new character. Characters are used to associate print patterns
+	// with characters so that the text can be preserved for copy/paste on
+	// export.
+	//
+	// Advance is the baseline advance distance in millimeters.
+	// Columns contains the print columns for the character. It may be sparse
+	// or empty.
+	//
+	// UniChar is the equivalent Unicode character. 0 means no equivalent.
+	//
+	// The character ID for the new character is returned.
+	virtual uint32 DefineChar(double advance, vdspan<const CharColumn> columns, uint32 uniChar) = 0;
+
+	// Return the advance distance previously defined for a character, by ID.
+	virtual float GetCharAdvance(uint32 ch) const = 0;
+
+	// Return the equivalent unicode character for a previously defined character,
+	// by ID. 0 means no equivalent.
+	virtual uint32 GetCharUnicodeChar(uint32 ch) const = 0;
+
+	// Return the print columns associated with a previously defined character,
+	// by ID.
+	virtual vdspan<const CharColumn> GetCharColumns(uint32 ch) const = 0;
+
+	// Print a character at the given X position, by character ID. The print head
+	// is moved to the right by the advance distance from the specified X position.
+	virtual void PrintChar(double x, uint32 ch) = 0;
 
 	// Move the current pen position to the given absolute X and relative Y
 	// in mm, feeding paper to match.

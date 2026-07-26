@@ -129,6 +129,8 @@ public:
 	// color.
 	uint32 ConvertLinearColorToSrgb(uint32 c) const;
 
+	vdrect32f GetMaxCharBounds() const;
+
 	struct CullInfo {
 		size_t mLineStart;
 		size_t mLineEnd;
@@ -151,13 +153,16 @@ public:
 	void ExtractNextLineDots(vdfastvector<RenderDot>& renderDots, CullInfo& cullInfo, const vdrect32f& r) const;
 
 	struct RenderColumn {
+		static constexpr uint32 kCharBit = UINT32_C(0x80000000);
+
 		float mX;
 		uint32 mPins;
 	};
 
 	// Extract columns from a line within the pre-cull rect. The top of the rectangle must be at or below
 	// the top height of the last rectangle.
-	bool ExtractNextLine(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const;
+	bool ExtractNextLineAsDots(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const;
+	bool ExtractNextLineAsDotsOrChars(vdfastvector<RenderColumn>& renderColumns, float& renderY, CullInfo& cullInfo, const vdrect32f& r) const;
 
 	// Vector line. This is always oriented top-down (y2 > y1).
 	struct RenderVector {
@@ -179,6 +184,11 @@ public:
 	
 	void FeedPaper(double distanceMM) override;
 	void Print(double x, uint32 dots) override;
+	uint32 DefineChar(double advance, vdspan<const CharColumn> dotColumns, uint32 uniChar) override;
+	float GetCharAdvance(uint32 ch) const override;
+	uint32 GetCharUnicodeChar(uint32 ch) const override;
+	vdspan<const ATPrinterGraphicalOutput::CharColumn> GetCharColumns(uint32 ch) const override;
+	void PrintChar(double x, uint32 ch) override;
 	void MoveVector(const vddouble2& pt) override;
 	void AddVector(const vddouble2& pt1, const vddouble2& pt2, uint32 color) override;
 	void ChangePenColor(uint32 color) override;
@@ -198,8 +208,10 @@ private:
 	};
 
 	struct PrintColumn {
+		static constexpr uint32 kCharBit = UINT32_C(0x80000000);
+
 		float mX = 0;
-		uint32 mDots = 0;
+		uint32 mDotsOrChar = 0;
 	};
 
 	// 1cm x 1cm tiles
@@ -233,6 +245,8 @@ private:
 		float mXD = 0;
 		float mYD = 0;
 	};
+
+	Line& CreateLine();
 
 	size_t HashVectorTile(sint32 tileX, sint32 tileY) const;
 	std::pair<size_t, bool> FindVectorTile(sint32 tileX, sint32 tileY) const;
@@ -269,6 +283,17 @@ private:
 	vdvector<VectorTile> mVectorTiles;
 	vdfastvector<Vector> mVectors;
 	vdfastvector<uint32> mVectorBitSet;
+
+	vdfastvector<CharColumn> mCharColumns;
+
+	struct CharInfo {
+		uint32 mDotPatternStart;
+		uint32 mDotPatternCount;
+		float mAdvance;
+		uint32 mUnicodeChar;
+	};
+
+	vdfastvector<CharInfo> mCharInfos;
 
 	bool mbInvalidated = false;
 	bool mbInvalidatedAll = false;

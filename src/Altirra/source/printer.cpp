@@ -19,6 +19,7 @@
 #include <vd2/system/strutil.h>
 #include <at/atcore/atascii.h>
 #include <at/atcore/audiomixer.h>
+#include <at/atcore/configvar.h>
 #include <at/atcore/enumparseimpl.h>
 #include <at/atcore/cio.h>
 #include <at/atcore/propertyset.h>
@@ -26,11 +27,13 @@
 #include "kerneldb.h"
 #include "printerfont.h"
 
+ATConfigVarBool g_ATCVPrinterRenderChars("printer.render_chars", true);
+
 ////////////////////////////////////////////////////////////////////////////////
 
 uint32 ATDevicePrinterBase::RenderedLine::GetNonZeroLength() const {
-	auto it = mDotPatterns.begin();
-	auto itEnd = mDotPatterns.end();
+	auto it = mDotPatternsOrChars.begin();
+	auto itEnd = mDotPatternsOrChars.end();
 
 	while(it != itEnd && itEnd[-1] == 0)
 		--itEnd;
@@ -41,7 +44,7 @@ uint32 ATDevicePrinterBase::RenderedLine::GetNonZeroLength() const {
 uint32 ATDevicePrinterBase::RenderedLine::TrimZeroAtEnd() {
 	uint32 n = GetNonZeroLength();
 
-	mDotPatterns.resize(n);
+	mDotPatternsOrChars.resize(n);
 	mPositions.resize(n);
 
 	return n;
@@ -342,7 +345,12 @@ void ATDevicePrinterBase::BeginGraphics() {
 		ATDeviceInfo info;
 		GetDeviceInfo(info);
 
-		mpPrinterGraphicalOutput = GetService<IATPrinterOutputManager>()->CreatePrinterGraphicalOutput(GetPrinterOutputName().c_str(), GetGraphicsSpec());
+		const auto& spec = GetGraphicsSpec();
+
+		mpPrinterGraphicalOutput = GetService<IATPrinterOutputManager>()->CreatePrinterGraphicalOutput(GetPrinterOutputName().c_str(), spec);
+
+		// move head to left margin
+		mpPrinterGraphicalOutput->MoveVector(vddouble2 { spec.mLeftMarginMM, 0 });
 
 		OnCreatedGraphicalOutput();
 	}
@@ -457,16 +465,60 @@ IATPrinterOutput *ATDevicePrinterBase::GetTextOutput() {
 	return printer;
 }
 
-ATDevicePrinterBase::RenderedLine *ATDevicePrinterBase::BeginRenderLine(uint32 width) {
+uint32 ATDevicePrinterBase::UploadFont(const ATPrinterFontDesc& desc, const uint8 *fontData, float xStep, float xAdvance, FontUploadStyle style, vdspan<const uint32> uniChars) {
+	if (!mpPrinterGraphicalOutput) {
+		VDFAIL("No printer graphical output.");
+		return 0;
+	}
+
+	VDASSERT(uniChars.size() == (desc.mCharLast - desc.mCharFirst) + 1);
+
+	uint32 index = 0;
+
+	using CharColumn = IATPrinterGraphicalOutput::CharColumn;
+	vdfastvector<CharColumn> columns;
+
+	for(uint32 ch = desc.mCharFirst; ch <= desc.mCharLast; ++ch) {
+		columns.clear();
+
+		uint8 lastDots = 0;
+		for(uint32 i = 0; i < desc.mWidth; ++i) {
+			uint8 dots = *fontData++;
+
+			if (style == FontUploadStyle::BoldOneOver) {
+				const uint8 boldDots = dots | lastDots;
+				lastDots = dots;
+
+				dots = boldDots;
+			}
+
+			if (dots) {
+				columns.emplace_back(CharColumn { dots, xStep * (float)i });
+
+				if (style == FontUploadStyle::BoldDuplicate)
+					columns.emplace_back(CharColumn { dots, xStep * ((float)i + 0.5f) });
+			}
+		}
+
+		if (style == FontUploadStyle::BoldOneOver && lastDots)
+			columns.emplace_back(CharColumn { lastDots, xStep * (float)desc.mWidth });
+
+		index = mpPrinterGraphicalOutput->DefineChar(xAdvance, columns, uniChars[ch - desc.mCharFirst]);
+	}
+
+	return index - (desc.mCharLast - desc.mCharFirst);
+}
+
+ATDevicePrinterBase::RenderedLine *ATDevicePrinterBase::BeginRenderLine(uint32 entries) {
 	if (mRenderedLinesQueued >= vdcountof(mRenderedLines))
 		return nullptr;
 
 	RenderedLine *rl = &mRenderedLines[mRenderedLinesQueued];
 
-	rl->mDotPatterns.clear();
-	rl->mDotPatterns.resize(width, 0);
+	rl->mDotPatternsOrChars.clear();
+	rl->mDotPatternsOrChars.resize(entries, 0);
 	rl->mPositions.clear();
-	rl->mPositions.resize(width, 0);
+	rl->mPositions.resize(entries, 0);
 
 	return rl;
 }
@@ -482,12 +534,12 @@ void ATDevicePrinterBase::EndRenderLine(const RenderLineParams& params) {
 	++mRenderedLinesQueued;
 }
 
-void ATDevicePrinterBase::RenderLineWithFont(const ATPrinterFontDesc& desc, const uint8 *fontData, uint8 *charData, uint32 n, float x, float xStep, float xSpacing, bool bold, const RenderLineParams& params) {
+void ATDevicePrinterBase::RenderLineWithFont(const ATPrinterFontDesc& desc, const uint8 *fontData, const uint8 *charData, uint32 n, float x, float xStep, float xSpacing, bool bold, const RenderLineParams& params) {
 	RenderedLine *rl = BeginRenderLine((desc.mWidth + (bold ? 1 : 0)) * n);
 	if (!rl)
 		return;
 
-	uint8 *dotDst = rl->mDotPatterns.data();
+	uint32 *dotDst = rl->mDotPatternsOrChars.data();
 	float *posDst = rl->mPositions.data();
 
 	for(uint32 i = 0; i < n; ++i) {
@@ -528,6 +580,34 @@ void ATDevicePrinterBase::RenderLineWithFont(const ATPrinterFontDesc& desc, cons
 	EndRenderLine(params);
 }
 
+void ATDevicePrinterBase::RenderLineWithChars(uint32 charBase, const ATPrinterFontDesc& desc, vdspan<const uint8> charData, float x, const RenderLineParams& params) {
+	RenderedLine *rl = BeginRenderLine(charData.size());
+	if (!rl)
+		return;
+
+	uint32 *chDst = rl->mDotPatternsOrChars.data();
+	float *posDst = rl->mPositions.data();
+
+	// MERGE NOTE: test15 subtracted one dot radius here even though uploaded
+	// character columns use the same dot-center offsets as RenderLineWithFont.
+	// That shifted tracked text left relative to the fallback dot path and
+	// placed the first dot left of the configured printer margin.
+
+	for(uint32 ch : charData) {
+		if (ch < desc.mCharFirst || ch > desc.mCharLast)
+			ch = desc.mCharFirst;
+
+		ch += charBase - desc.mCharFirst;
+
+		*posDst++ = x;
+		*chDst++ = ch | rl->kCharBit;
+
+		x += mpPrinterGraphicalOutput->GetCharAdvance(ch);
+	}
+
+	EndRenderLine(params);
+}
+
 void ATDevicePrinterBase::FlushRenderedLines(bool fromCIO) {
 	if (mbAccurateTimingEnabled) {
 		BeginPrinting(fromCIO);
@@ -539,8 +619,10 @@ void ATDevicePrinterBase::FlushRenderedLines(bool fromCIO) {
 			const RenderedLine& rl = mRenderedLines[i];
 
 			const float *pos = rl.mPositions.data();
-			for(uint8 v : rl.mDotPatterns) {
-				if (v)
+			for(uint32 v : rl.mDotPatternsOrChars) {
+				if (v & rl.kCharBit)
+					mpPrinterGraphicalOutput->PrintChar(*pos, v - rl.kCharBit);
+				else if (v)
 					mpPrinterGraphicalOutput->Print(*pos, v);
 
 				++pos;
@@ -636,36 +718,69 @@ void ATDevicePrinterBase::ContinuePrinting() {
 		} else if (mPrintState == PrintState::PrintColumns) {
 			while(mPrintNextColumn < rl.mPositions.size()) {
 				float xpos = rl.mPositions[mPrintNextColumn];
-				uint8 pattern = rl.mDotPatterns[mPrintNextColumn];
+				uint32 pattern = rl.mDotPatternsOrChars[mPrintNextColumn];
 				++mPrintNextColumn;
 
 				if (!pattern)
 					continue;
 
-				if (mpPrinterGraphicalOutput)
-					mpPrinterGraphicalOutput->Print(xpos, pattern);
+				if (mpPrinterGraphicalOutput) {
+					if (pattern & rl.kCharBit)
+						mpPrinterGraphicalOutput->PrintChar(xpos, pattern - rl.kCharBit);
+					else
+						mpPrinterGraphicalOutput->Print(xpos, pattern);
+				}
 
 				const uint32 t = mpScheduler->GetTick();
 
 				if (mbSoundEnabled) {
-					if (rl.mParams.mPrintDelayPerY != 0) {
-						// pins sequential
+					if (pattern & rl.kCharBit) {
 						const double schedulerRate = mpScheduler->GetRate().asDouble();
 
-						for(int i=0; i<8; ++i) {
-							if (pattern & (1 << i)) {
-								mPrinterSoundSource.AddPinSound(t + VDRoundToInt32(schedulerRate * (float)i * rl.mParams.mPrintDelayPerY), 1);
+						for(const auto& cc : mpPrinterGraphicalOutput->GetCharColumns(pattern - rl.kCharBit)) {
+							const float xTimeOffset = rl.mParams.mPrintDelayPerX * cc.mXOffset;
+							const uint8 charPattern = (uint8)cc.mDots;
+
+							if (rl.mParams.mPrintDelayPerY != 0) {
+								// pins sequential
+								for(int i=0; i<8; ++i) {
+									if (charPattern & (1 << i)) {
+										mPrinterSoundSource.AddPinSound(t + VDRoundToInt32(schedulerRate * (xTimeOffset + (float)i * rl.mParams.mPrintDelayPerY)), 1);
+									}
+								}
+							} else {
+								const uint32 t2 = t + VDRoundToInt32(schedulerRate * xTimeOffset);
+
+								// all pins at once
+								uint8 pinCount = charPattern;
+
+								pinCount -= (pinCount >> 1) & 0x55;
+								pinCount = ((pinCount >> 2) & 0x33) + (pinCount & 0x33);
+								pinCount = (pinCount & 0x0F) + (pinCount >> 4);
+
+								mPrinterSoundSource.AddPinSound(t2, pinCount);
 							}
 						}
 					} else {
-						// all pins at once
-						uint8 pinCount = pattern;
+						if (rl.mParams.mPrintDelayPerY != 0) {
+							// pins sequential
+							const double schedulerRate = mpScheduler->GetRate().asDouble();
 
-						pinCount -= (pinCount >> 1) & 0x55;
-						pinCount = ((pinCount >> 2) & 0x33) + (pinCount & 0x33);
-						pinCount = (pinCount & 0x0F) + (pinCount >> 4);
+							for(int i=0; i<8; ++i) {
+								if (pattern & (1 << i)) {
+									mPrinterSoundSource.AddPinSound(t + VDRoundToInt32(schedulerRate * (float)i * rl.mParams.mPrintDelayPerY), 1);
+								}
+							}
+						} else {
+							// all pins at once
+							uint8 pinCount = pattern;
 
-						mPrinterSoundSource.AddPinSound(t, pinCount);
+							pinCount -= (pinCount >> 1) & 0x55;
+							pinCount = ((pinCount >> 2) & 0x33) + (pinCount & 0x33);
+							pinCount = (pinCount & 0x0F) + (pinCount >> 4);
+
+							mPrinterSoundSource.AddPinSound(t, pinCount);
+						}
 					}
 				}
 
@@ -701,8 +816,9 @@ void ATDevicePrinterBase::ContinuePrinting() {
 				return;
 			}
 		} else if (mPrintState == PrintState::LineAdvance) {
-			if (mpPrinterGraphicalOutput)
-				mpPrinterGraphicalOutput->FeedPaper(rl.mParams.mLineAdvance);
+			if (mpPrinterGraphicalOutput) {
+				mpPrinterGraphicalOutput->MoveVector(vddouble2 { GetGraphicsSpec().mLeftMarginMM, rl.mParams.mLineAdvance } );
+			}
 
 			++mRenderedLinesPrinted;
 			mPrintState = PrintState::PreDelay;
@@ -890,10 +1006,49 @@ void ATDevicePrinter820::GetDeviceInfo(ATDeviceInfo& info) {
 	info.mpDef = &g_ATDeviceDefPrinter820;
 }
 
+void ATDevicePrinter820::OnCreatedGraphicalOutput() {
+	uint32 uniChars[95];
+
+	// The normal font contains characters $20-7E, matching ASCII -- NOT
+	// ATASCII.
+
+	for(uint32 i = 0; i < 95; ++i)
+		uniChars[i] = i + 0x20;
+
+	mCharBaseNormal = UploadFont(
+		g_ATPrinterFont820.mDesc,
+		g_ATPrinterFont820.mColumns,
+		kXStepMM,
+		kXStepMM * (float)g_ATPrinterFont820.mDesc.mWidth + kXSpacingMM,
+		FontUploadStyle::Normal,
+		vdspan(uniChars, 0x5F));
+
+	// The sideways font contains characters $30-5F, matching ATASCII.
+	// The difference is in $5E-5F, which are arrows. Our font also has
+	// a space character at $2F.
+
+	uniChars[0] = 0x20;
+
+	for(uint32 i = 0; i < 46; ++i)
+		uniChars[i+1] = 0x30 + i;
+
+	uniChars[0x5E - 0x2F] = 0x2191;
+	uniChars[0x5F - 0x2F] = 0x2190;
+
+	mCharBaseSideways = UploadFont(
+		g_ATPrinterFont820S.mDesc,
+		g_ATPrinterFont820S.mColumns,
+		kXStepMM,
+		kXStepMM * (float)g_ATPrinterFont820S.mDesc.mWidth + kXSpacingMM,
+		FontUploadStyle::Normal,
+		vdspan(uniChars, 0x31));
+}
+
 ATPrinterGraphicsSpec ATDevicePrinter820::GetGraphicsSpec() const {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 98.425f;			// 3+7/8" wide paper
 	spec.mPageVBorderMM = 8.0f;				// vertical border
+	spec.mLeftMarginMM = kXStartMM;
 	spec.mDotRadiusMM = 0.22f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 0.44704f;	// 0.0176" vertical pitch
 	spec.mbBit0Top = true;
@@ -964,24 +1119,27 @@ void ATDevicePrinter820::HandleFrameInternal(uint8 orientation, uint8 *buf, uint
 
 	// write out line
 	if (graphics) {
-		static constexpr float xStartMM = 8.19750786f;
-		static constexpr float xStepMM = 0.3606987f;
-		static constexpr float xSpacingMM = 0.275780499f;
-
 		// 10.75 inches/sec per 820 service manual
 		static constexpr float kSecsPerMM = 1.0f / (10.75f * 25.4f);
 
 		static constexpr RenderLineParams params {
 			.mPrintDelay = 0.800f,			// 800ms/line per service manual
-			.mPrintDelayXHome = xStartMM,
+			.mPrintDelayXHome = kXStartMM,
 			.mPrintDelayPerX = kSecsPerMM,
 			.mLineAdvance = 4.23333f
 		};
 
-		if (sideways)
-			RenderLineWithFont(g_ATPrinterFont820S.mDesc, g_ATPrinterFont820S.mColumns, buf, len - 1, xStartMM, xStepMM, xSpacingMM, false, params);
-		else
-			RenderLineWithFont(g_ATPrinterFont820.mDesc, g_ATPrinterFont820.mColumns, buf, len - 1, xStartMM, xStepMM, xSpacingMM, false, params);
+		if (g_ATCVPrinterRenderChars) {
+			if (sideways)
+				RenderLineWithChars(mCharBaseSideways, g_ATPrinterFont820S.mDesc, vdspan(buf, len - 1), kXStartMM, params);
+			else
+				RenderLineWithChars(mCharBaseNormal, g_ATPrinterFont820.mDesc, vdspan(buf, len - 1), kXStartMM, params);
+		} else {
+			if (sideways)
+				RenderLineWithFont(g_ATPrinterFont820S.mDesc, g_ATPrinterFont820S.mColumns, buf, len - 1, kXStartMM, kXStepMM, kXSpacingMM, false, params);
+			else
+				RenderLineWithFont(g_ATPrinterFont820.mDesc, g_ATPrinterFont820.mColumns, buf, len - 1, kXStartMM, kXStepMM, kXSpacingMM, false, params);
+		}
 
 		return;
 	}
@@ -1058,6 +1216,17 @@ void ATDevicePrinter1025::ColdReset() {
 	ResetState();
 }
 
+void ATDevicePrinter1025::OnCreatedGraphicalOutput() {
+	uint32 uniChars[128];
+
+	for(uint32 i = 0; i < 128; ++i)
+		uniChars[i] = kATATASCIITables.mATASCIIToUnicode[1][i];
+
+	mCharBase10Cpi = UploadFont(g_ATPrinterFont1025.mDesc, g_ATPrinterFont1025.mColumns, kXStep10CpiMM, kXAdvance10CpiMM, FontUploadStyle::Normal, uniChars);
+	mCharBase5Cpi = UploadFont(g_ATPrinterFont1025.mDesc, g_ATPrinterFont1025.mColumns, kXStep10CpiMM * 2.0f, kXAdvance10CpiMM * 2.0f, FontUploadStyle::BoldOneOver, uniChars);
+	mCharBase16_5Cpi = UploadFont(g_ATPrinterFont1025.mDesc, g_ATPrinterFont1025.mColumns, kXStep10CpiMM * (10.0f / 16.5f), kXAdvance10CpiMM * (10.0f / 16.5f), FontUploadStyle::Normal, uniChars);
+}
+
 void ATDevicePrinter1025::InitSIOReceiveTimeout() {
 	// 1025 per-byte timeout is approximately 845K cycles at 7.35MHz/12, or
 	// ~1.37 seconds.
@@ -1068,6 +1237,7 @@ ATPrinterGraphicsSpec ATDevicePrinter1025::GetGraphicsSpec() const {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 215.9f;				// 8.5" wide paper
 	spec.mPageVBorderMM = 8.0f;				// vertical border
+	spec.mLeftMarginMM = kXStartMM;
 	spec.mDotRadiusMM = 0.28f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 0.44704f;	// 0.0176" vertical pitch
 	spec.mbBit0Top = true;
@@ -1242,9 +1412,9 @@ void ATDevicePrinter1025::HandleFrameInternal(uint8 orientation, uint8 *buf, uin
 
 void ATDevicePrinter1025::FlushLine(bool graphics) {
 	if (graphics) {
-		float xStartMM = 6.31359720f;
-		float xStepMM = 0.21192742f;
-		float xSpacingMM = 2.54f - xStepMM * 9;
+		float xStartMM = kXStartMM;
+		float xStepMM = kXStep10CpiMM;
+		float xSpacingMM = kXSpacing10CpiMM;
 
 		bool bold = false;
 
@@ -1283,28 +1453,45 @@ void ATDevicePrinter1025::FlushLine(bool graphics) {
 		static constexpr float kTimePerMMNormal = (4060.0f / kMachineClock) / kMMPerPhase;
 		static constexpr float kTimePerMMCondensed = (6740.0f / kMachineClock) / kMMPerPhase;
 
+		static constexpr float kLineAdvanceDelay = 0.3f;
+
+		const float dotColsToPrint = (float)colsToPrint * 6.0f;
+		const float mmsToPrint = dotColsToPrint * xStepMM;
+
 		const float timePerMM = (mCharDensity == CharDensity::Cpi16_5)
 			? kTimePerMMCondensed
 			: kTimePerMMNormal;
 
 		const RenderLineParams params {
-			.mPrintDelay = timePerMM * (xStepMM * 6) * colsToPrint,
+			.mPrintDelay = timePerMM * mmsToPrint,
 			.mPrintDelayXHome = xStartMM,
 			.mPrintDelayPerX = timePerMM,
+			.mPostDelay = kTimePerMMNormal * mmsToPrint + kLineAdvanceDelay,
 			.mLineAdvance = mbDenseLines ? 3.175f : 4.23333f
 		};
 
-		RenderLineWithFont(
-			g_ATPrinterFont1025.mDesc,
-			g_ATPrinterFont1025.mColumns,
-			mRawLineBuffer,
-			colsToPrint,
-			xStartMM,
-			xStepMM,
-			xSpacingMM,
-			bold,
-			params
-		);
+		if (g_ATCVPrinterRenderChars) {
+			RenderLineWithChars(
+				mCharDensity == CharDensity::Cpi16_5 ? mCharBase16_5Cpi
+				: mCharDensity == CharDensity::Cpi5 ? mCharBase5Cpi
+				: mCharBase10Cpi,
+				g_ATPrinterFont1025.mDesc,
+				vdspan(mRawLineBuffer).first(colsToPrint),
+				xStartMM,
+				params);
+		} else {
+			RenderLineWithFont(
+				g_ATPrinterFont1025.mDesc,
+				g_ATPrinterFont1025.mColumns,
+				mRawLineBuffer,
+				colsToPrint,
+				xStartMM,
+				xStepMM,
+				xSpacingMM,
+				bold,
+				params
+			);
+		}
 	} else {
 		// trim off any spaces at the end, just to make the printer output nicer
 		while(mColumn && mRawLineBuffer[mColumn - 1] == 0x20)
@@ -1391,10 +1578,36 @@ void ATDevicePrinter1029::ColdReset() {
 	ResetState();
 }
 
+void ATDevicePrinter1029::OnCreatedGraphicalOutput() {
+	uint32 uniChars[128];
+
+	for(int i=0; i<128; ++i)
+		uniChars[i] = kATATASCIITables.mATASCIIToUnicode[1][i];
+
+	mCharBaseNormal = UploadFont(
+		g_ATPrinterFont1029.mDesc,
+		g_ATPrinterFont1029.mColumns,
+		kXStep,
+		kXStep * 6,
+		FontUploadStyle::Normal,
+		uniChars
+	);
+
+	mCharBaseElongated = UploadFont(
+		g_ATPrinterFont1029.mDesc,
+		g_ATPrinterFont1029.mColumns,
+		kXStep * 2,
+		kXStep * 12,
+		FontUploadStyle::BoldDuplicate,
+		uniChars
+	);
+}
+
 ATPrinterGraphicsSpec ATDevicePrinter1029::GetGraphicsSpec() const {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 215.9f;				// 8.5" wide paper
 	spec.mPageVBorderMM = 8.0f;				// vertical border
+	spec.mLeftMarginMM = kLeftMarginMM;
 	spec.mDotRadiusMM = 0.28f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 0.403175f;	// 0.0159" vertical pitch
 	spec.mbBit0Top = true;
@@ -1445,7 +1658,7 @@ void ATDevicePrinter1029::HandleFrameInternal(uint8 orientation, uint8 *buf, uin
 	//	ESC CTRL+X		ignore european characters
 	//	ESC CTRL+Y		enable underlining
 	//	ESC CTRL+Z		disable underlining
-	//	ESC CTRL+A		begin bit image graphics
+	//	ESC A			begin bit image graphics
 	//	ESC ESC			treated as ESC
 	//	ESC EOL			treated as EOL
 	//
@@ -1472,6 +1685,12 @@ void ATDevicePrinter1029::HandleFrameInternal(uint8 orientation, uint8 *buf, uin
 
 			if (++mDotColumn >= 480)
 				FlushLine(graphics);
+
+			// EOLs are still processed in graphics mode and indicate the end
+			// of the line to process in the Write command. The EOL itself is
+			// handled as a graphics character.
+			if (c == 0x9B)
+				break;
 		} else {
 			// check for EOL
 			if (c == 0x9B) {
@@ -1613,17 +1832,25 @@ void ATDevicePrinter1029::HandleFrameInternal(uint8 orientation, uint8 *buf, uin
 					mUnderlineBuffer[col++] = 0x02;
 			}
 
-			// Add the character pattern to the dot buffer. If in elongated mode, double
-			// the width by repeating each column.
-			const uint8 *chdat = &g_ATPrinterFont1029.mColumns[5 * c];
+			// Add the character pattern to the dot buffer. This is done as a character
+			// code, with font translation and elongation happening during the flush.
+			// The remaining columns are padded to maintain positioning.
+			if (g_ATCVPrinterRenderChars) {
+				mDotBuffer[mDotColumn++] = c + (mbElongated ? mCharBaseElongated : mCharBaseNormal) + RenderedLine::kCharBit;
 
-			for(int i=0; i<5; ++i) {
-				const uint8 pat = *chdat++;
+				for(int i = mbElongated ? 9 : 4; i; --i)
+					mDotBuffer[mDotColumn++] = 0;
+			} else {
+				const uint8 *chdat = &g_ATPrinterFont1029.mColumns[5 * c];
 
-				mDotBuffer[mDotColumn++] = pat;
+				for(int i=0; i<5; ++i) {
+					const uint8 pat = *chdat++;
 
-				if (mbElongated)
 					mDotBuffer[mDotColumn++] = pat;
+
+					if (mbElongated)
+						mDotBuffer[mDotColumn++] = pat;
+				}
 			}
 
 			// Add the spacing (which may overrun), and then flush the line if it is
@@ -1647,22 +1874,40 @@ void ATDevicePrinter1029::FlushLine(bool graphics) {
 		// ~0.362ms/dot based on audio recordings
 		static constexpr float kPrintDelayPerDot = 0.000362f;
 
-		static constexpr float kLeftMarginMM = 0.25f * 25.4f;
 		RenderedLine *rl = BeginRenderLine(480);
 
-		static constexpr float xStep = 8.0f / 480.0f * 25.4f;
 		if (rl) {
 			float x = kLeftMarginMM;
 
 			for(float& v : rl->mPositions) {
 				v = x;
-				x += xStep;
+				x += kXStep;
 			}
 
-			memcpy(rl->mDotPatterns.data(), mDotBuffer, 480);
+			for(int i=0; i<480; ++i)
+				rl->mDotPatternsOrChars[i] = mDotBuffer[i];
+
+			// Trim off any space characters at the end of the buffer. This is to approximate
+			// the 1029's behavior of not printing whitespace at the end of the line. This
+			// conflicts somewhat with our goal of keeping characters, but we can trim off
+			// entire spaces at least.
+			for(int i = 479; i >= 0; --i) {
+				uint32& dotOrChar = rl->mDotPatternsOrChars[i];
+
+				// MERGE NOTE: test15 checked only kCharBit + 0x20, which
+				// trims a normal-width space only when the normal font starts
+				// at character ID 0. Elongated spaces use the second uploaded
+				// font and must be trimmed too, or they extend print timing and
+				// exported text to the end of the line.
+				if (dotOrChar == rl->kCharBit + mCharBaseNormal + 0x20
+					|| dotOrChar == rl->kCharBit + mCharBaseElongated + 0x20)
+					dotOrChar = 0;
+				else if (dotOrChar != 0)
+					break;
+			}
 
 			const uint32 len = rl->TrimZeroAtEnd();
-			const float advanceDuration = kPrintDelayPerMM * xStep * (float)len;
+			const float advanceDuration = kPrintDelayPerMM * kXStep * (float)len;
 			const float retractDuration = 0.5f * advanceDuration;
 
 			const RenderLineParams params {
@@ -1694,10 +1939,11 @@ void ATDevicePrinter1029::FlushLine(bool graphics) {
 
 				for(float& v : rl->mPositions) {
 					v = x;
-					x += xStep;
+					x += kXStep;
 				}
 
-				memcpy(rl->mDotPatterns.data(), mUnderlineBuffer, 482);
+				for(int i=0; i<482; ++i)
+					rl->mDotPatternsOrChars[i] = mUnderlineBuffer[i];
 
 				const uint32 len = rl->TrimZeroAtEnd();
 				const float advanceDuration = kPrintDelayPerMM * (float)len;
@@ -1800,6 +2046,7 @@ void ATDevicePrinter825::Init() {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 215.9f;				// 8.5" wide paper
 	spec.mPageVBorderMM = 8.0f;				// vertical border
+	spec.mLeftMarginMM = kLeftMarginMM;
 	spec.mDotRadiusMM = 0.22f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 0.403175f;	// 0.0159" vertical pitch (guess)
 	spec.mbBit0Top = true;
@@ -2038,7 +2285,6 @@ void ATDevicePrinter825::PrintColumn(uint32 pins) {
 	}
 
 	if (mpGraphicsOutput && pins) {
-		static constexpr float kLeftMarginMM = 8.0f;
 		mpGraphicsOutput->Print(kLeftMarginMM + (float)mDotColumn * mAdvanceMMPerColumn, pins);
 	}
 

@@ -119,6 +119,7 @@ ATPrinterGraphicsSpec ATDevicePrinter1020::GetGraphicsSpec() const {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = kPaperWidthMM<float>;	// 4.5" wide paper (based on CGP-115 service manual)
 	spec.mPageVBorderMM = kMarginMM<float>;		// vertical border
+	spec.mLeftMarginMM = kMarginMM<float>;
 	spec.mDotRadiusMM = 0.090f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 0.403175f;	// 0.0159" vertical pitch (guess)
 	spec.mbBit0Top = true;
@@ -141,6 +142,11 @@ uint8 ATDevicePrinter1020::GetWidthForOrientation(uint8 aux1) const {
 }
 
 void ATDevicePrinter1020::GetStatusFrameInternal(uint8 frame[4]) {
+	frame[0] = 0;
+	frame[1] = 0;
+	frame[2] = 255;
+	frame[3] = 64;
+
 	ResetState();
 }
 
@@ -481,18 +487,33 @@ void ATDevicePrinter1020::HandleFrameInternal(uint8 orientation, uint8 *buf, uin
 						const uint32 newPenIndex = mArg1 > 3 ? 0 : mArg1;
 
 						// The 1020 needs to return to the left margin and click the head against
-						// the left stop in order to rotate the pen carriage; two clicks are needed
-						// for each pen change.
+						// the left stop in order to rotate the pen carriage. The sequence in the
+						// firmware is as follows:
+						//
+						//	- Move to left margin.
+						//	- Move -60 from left margin.
+						//	- For each pen cycle required:
+						//		- Move +30 and then -30 horizontally, 2x.
+						//		- If another cycle is required, so another +30/-30 pair of moves.
+						//	- Move back to final position.
 
 						if (mPenIndex != newPenIndex) {
-							while(mPenIndex != newPenIndex) {
-								AddMoveAction(vddouble2(0, 0));
-								AddMoveAction(ConvertPointFToMM(0, 0));
-								AddMoveAction(vddouble2(0, 0));
-								AddMoveAction(ConvertPointFToMM(0, 0));
+							AddMoveAction(ConvertPointFToMM(-60, 0));
+
+							for(;;) {
+								AddMoveAction(ConvertPointFToMM(-30, 0));
+								AddMoveAction(ConvertPointFToMM(-60, 0));
+								AddMoveAction(ConvertPointFToMM(-30, 0));
+								AddMoveAction(ConvertPointFToMM(-60, 0));
 
 								mPenIndex = (mPenIndex + 1) & 3;
 								AddPenChangeAction(mPenIndex);
+
+								if (mPenIndex == newPenIndex)
+									break;
+
+								AddMoveAction(ConvertPointFToMM(-30, 0));
+								AddMoveAction(ConvertPointFToMM(-60, 0));
 							}
 
 							AddMoveAction(ConvertPointToMM(mX, 0));
@@ -1257,23 +1278,32 @@ void ATDevicePrinter1020::ProcessNextDrawingAction() {
 						mLastHeadDirection = deltaVec.x;
 					}
 
-					// compute cycles to move
-					const float cyclesF = lineDistance * 20000.0f;
-					const sint32 cycles = VDRoundToInt32(cyclesF);
+					// Compute cycles to move.
+					//
+					// The Tandy CGP-115 Service Manual gives a speed of approx. 52mm/sec with a step
+					// resolution of 0.200mm. An audio recording of head movement from a 1020 gives a
+					// peak at ~255Hz +/- 1Hz, which at 0.200mm/step is 51mm/sec.
+					//
+					{
+						static constexpr float kSecPerMM = 1.0f / 51.0f;
 
-					if (cycles > 0 && mbSoundEnabled && mbAccurateTimingEnabled) {
-						const double cyclesToSecs = mpScheduler->GetRate().AsInverseDouble();
+						const double secsPerCycle = mpScheduler->GetRate().AsInverseDouble();
 
-						if (deltaVec.x != 0)
-							mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020HeadMove, true, 0, cycles * cyclesToSecs, 1.0f);
+						const float cyclesF = lineDistance * kSecPerMM / secsPerCycle;
+						const sint32 cycles = VDRoundToInt32(cyclesF);
 
-						if (deltaVec.y != 0)
-							mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PaperFeed, true, 0, cycles * cyclesToSecs, 1.0f);
+						if (cycles > 0 && mbSoundEnabled && mbAccurateTimingEnabled) {
+							if (deltaVec.x != 0)
+								mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020HeadMove, true, 0, cycles * secsPerCycle, 1.0f);
+
+							if (deltaVec.y != 0)
+								mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PaperFeed, true, 0, cycles * secsPerCycle, 1.0f);
+						}
+
+						mDrawTotalCycles = std::max<sint32>(1, cycles);
+						mDrawRemainingCycles = cycles;
+						mbDrawingActionPending = true;
 					}
-
-					mDrawTotalCycles = cycles;
-					mDrawRemainingCycles = cycles;
-					mbDrawingActionPending = true;
 					break;
 				}
 

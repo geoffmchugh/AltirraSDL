@@ -54,11 +54,9 @@ void ATTrueTypeEncoder::SetTimestamps(const VDDate& created, const VDDate& modif
 }
 
 void ATTrueTypeEncoder::SetDefaultAdvanceWidth(sint32 advance) {
+	VDASSERT(mGlyphs.empty());
 	mDefaultAdvanceWidth = advance;
-}
-
-void ATTrueTypeEncoder::SetDefaultChar(uint16 defaultCh) {
-	mDefaultChar = defaultCh;
+	mMaxAdvanceWidth = advance;
 }
 
 void ATTrueTypeEncoder::SetBreakChar(uint16 breakCh) {
@@ -70,8 +68,46 @@ ATTrueTypeGlyphIndex ATTrueTypeEncoder::BeginSimpleGlyph() {
 
 	TTFGlyphInfo& glyphInfo = mGlyphs.emplace_back();
 	glyphInfo.mStartIndex = (uint32)mGlyphPoints.size();
+	glyphInfo.mAdvanceWidth = mDefaultAdvanceWidth;
 
 	return glyphIndex;
+}
+
+void ATTrueTypeEncoder::AddCircleContour(sint32 cx, sint32 cy, sint32 r) {
+	// TrueType uses quadratic splines with clockwise orientation in a bottom-up coordinate
+	// system. We use 8 on-curve points at octants and round it off with another 8 off-curve
+	// points. For a unit circle, the length of an octagonal segment is:
+	//
+	//  hypot(1-sqrt(2)/2, sqrt(2)/2) = sqrt(2 - sqrt(2)) = 0.765367
+	//
+	// The law of cosines then gives the distance for the control point:
+	//
+	//  c^2 = a^2 + b^2 - 2ab cos theta    (theta = 22.5d, a=b)
+	//  2 - sqrt(2) = 2*a^2 * (1 - cos(135d))
+	//  2 - sqrt(2) = 2*a^2 * (1 + sqrt(2)/2)
+	//  a^2 = [2 - sqrt(2)] / [2 + sqrt(2)]
+	//  a = sqrt(2) - 1
+
+	const sint32 k = (r * 724) / 1024;	// sqrt(2)/2
+	const sint32 c = (r * 424) / 1024;	// sqrt(2) - 1
+
+	AddGlyphPoint(cx,   cy-r, true );
+	AddGlyphPoint(cx-c, cy-r, false);
+	AddGlyphPoint(cx-k, cy-k, true );
+	AddGlyphPoint(cx-r, cy-c, false);
+	AddGlyphPoint(cx-r, cy,   true );
+	AddGlyphPoint(cx-r, cy+c, false);
+	AddGlyphPoint(cx-k, cy+k, true );
+	AddGlyphPoint(cx-c, cy+r, false);
+	AddGlyphPoint(cx,   cy+r, true );
+	AddGlyphPoint(cx+c, cy+r, false);
+	AddGlyphPoint(cx+k, cy+k, true );
+	AddGlyphPoint(cx+r, cy+c, false);
+	AddGlyphPoint(cx+r, cy,   true );
+	AddGlyphPoint(cx+r, cy-c, false);
+	AddGlyphPoint(cx+k, cy-k, true );
+	AddGlyphPoint(cx+c, cy-r, false);
+	EndContour();
 }
 
 void ATTrueTypeEncoder::AddGlyphPoint(sint32 x, sint32 y, bool onCurve) {
@@ -88,6 +124,14 @@ void ATTrueTypeEncoder::EndContour() {
 	++mGlyphs.back().mNumContours;
 }
 
+void ATTrueTypeEncoder::SetGlyphAdvanceWidth(sint32 advanceUnits) {
+	TTFGlyphInfo& glyphInfo = mGlyphs.back();
+	glyphInfo.mAdvanceWidth = advanceUnits;
+
+	if (mMaxAdvanceWidth < advanceUnits)
+		mMaxAdvanceWidth = advanceUnits;
+}
+
 void ATTrueTypeEncoder::EndSimpleGlyph() {
 	TTFGlyphInfo& glyphInfo = mGlyphs.back();
 	auto it = mGlyphPoints.begin() + glyphInfo.mStartIndex;
@@ -95,19 +139,30 @@ void ATTrueTypeEncoder::EndSimpleGlyph() {
 
 	glyphInfo.mCount = (uint32)(itEnd - it);
 
+	// Apple's TTF documentation notes that a font must have two glyphs and the
+	// first glyph must have contours.
+	VDASSERT(mGlyphs.size() > 1 || glyphInfo.mCount > 0);
+
 	mMaxPoints = std::max<uint32>(mMaxPoints, glyphInfo.mCount);
 	mMaxContours = std::max<uint32>(mMaxContours, glyphInfo.mNumContours);
 
-	glyphInfo.mBBoxX1 = 0x7FFFFFFF;
-	glyphInfo.mBBoxY1 = 0x7FFFFFFF;
-	glyphInfo.mBBoxX2 = -0x7FFFFFFF - 1;
-	glyphInfo.mBBoxY2 = -0x7FFFFFFF - 1;
+	if (glyphInfo.mCount) {
+		glyphInfo.mBBoxX1 = 0x7FFFFFFF;
+		glyphInfo.mBBoxY1 = 0x7FFFFFFF;
+		glyphInfo.mBBoxX2 = -0x7FFFFFFF - 1;
+		glyphInfo.mBBoxY2 = -0x7FFFFFFF - 1;
 
-	for(const TTFPoint& pt : vdspan(it, itEnd)) {
-		glyphInfo.mBBoxX1 = std::min<sint32>(glyphInfo.mBBoxX1, pt.mX);
-		glyphInfo.mBBoxY1 = std::min<sint32>(glyphInfo.mBBoxY1, pt.mY);
-		glyphInfo.mBBoxX2 = std::max<sint32>(glyphInfo.mBBoxX2, pt.mX);
-		glyphInfo.mBBoxY2 = std::max<sint32>(glyphInfo.mBBoxY2, pt.mY);
+		for(const TTFPoint& pt : vdspan(it, itEnd)) {
+			glyphInfo.mBBoxX1 = std::min<sint32>(glyphInfo.mBBoxX1, pt.mX);
+			glyphInfo.mBBoxY1 = std::min<sint32>(glyphInfo.mBBoxY1, pt.mY);
+			glyphInfo.mBBoxX2 = std::max<sint32>(glyphInfo.mBBoxX2, pt.mX);
+			glyphInfo.mBBoxY2 = std::max<sint32>(glyphInfo.mBBoxY2, pt.mY);
+		}
+	} else {
+		glyphInfo.mBBoxX1 = 0;
+		glyphInfo.mBBoxY1 = 0;
+		glyphInfo.mBBoxX2 = 0;
+		glyphInfo.mBBoxY2 = 0;
 	}
 }
 
@@ -122,6 +177,7 @@ ATTrueTypeGlyphIndex ATTrueTypeEncoder::BeginCompositeGlyph() {
 	glyphInfo.mBBoxY1 = 0x7FFFFFFF;
 	glyphInfo.mBBoxX2 = -0x7FFFFFFF - 1;
 	glyphInfo.mBBoxY2 = -0x7FFFFFFF - 1;
+	glyphInfo.mAdvanceWidth = mDefaultAdvanceWidth;
 
 	return glyphIndex;
 }
@@ -151,27 +207,39 @@ void ATTrueTypeEncoder::EndCompositeGlyph() {
 
 	compGlyphInfo.mCount = (uint32)mGlyphReferences.size() - compGlyphInfo.mStartIndex;
 
-	uint32 numPoints = 0;
-	uint32 numContours = 0;
+	if (compGlyphInfo.mCount) {
+		uint32 numPoints = 0;
+		uint32 numContours = 0;
 
-	for(const TTFGlyphReference& ref : vdspan(mGlyphReferences).subspan(compGlyphInfo.mStartIndex)) {
-		const TTFGlyphInfo& srcGlyph = mGlyphs[(size_t)ref.mSrcGlyph];
+		for(const TTFGlyphReference& ref : vdspan(mGlyphReferences).subspan(compGlyphInfo.mStartIndex)) {
+			const TTFGlyphInfo& srcGlyph = mGlyphs[(size_t)ref.mSrcGlyph];
 
-		numPoints += srcGlyph.mCount;
+			numPoints += srcGlyph.mCount;
 
-		for(const TTFPoint& pt : vdspan(mGlyphPoints).subspan(srcGlyph.mStartIndex, srcGlyph.mCount)) {
-			if (pt.mbEndContour)
-				++numContours;
+			for(const TTFPoint& pt : vdspan(mGlyphPoints).subspan(srcGlyph.mStartIndex, srcGlyph.mCount)) {
+				if (pt.mbEndContour)
+					++numContours;
+			}
 		}
-	}
 
-	mMaxCompositePoints = std::max<uint32>(mMaxCompositePoints, numPoints);
-	mMaxCompositeContours = std::max<uint32>(mMaxCompositeContours, numContours);
-	mMaxCompositeElements = std::max<uint32>(mMaxCompositeElements, (uint32)(mGlyphReferences.size() - compGlyphInfo.mStartIndex));
-	mMaxCompositeDepth = 1;
+		mMaxCompositePoints = std::max<uint32>(mMaxCompositePoints, numPoints);
+		mMaxCompositeContours = std::max<uint32>(mMaxCompositeContours, numContours);
+		mMaxCompositeElements = std::max<uint32>(mMaxCompositeElements, (uint32)(mGlyphReferences.size() - compGlyphInfo.mStartIndex));
+		mMaxCompositeDepth = 1;
+	} else {
+		// no references -- turn this back into a simple glyph
+		compGlyphInfo.mNumContours = 0;
+		compGlyphInfo.mBBoxX1 = 0;
+		compGlyphInfo.mBBoxY1 = 0;
+		compGlyphInfo.mBBoxX2 = 0;
+		compGlyphInfo.mBBoxY2 = 0;
+	}
 }
 
 void ATTrueTypeEncoder::MapCharacter(uint32 ch, ATTrueTypeGlyphIndex glyphIndex) {
+	// Glyph 0 is the missing glyph and must not be mapped.
+	VDASSERT(glyphIndex != ATTrueTypeGlyphIndex(0));
+
 	mCharMappings.emplace_back(ch, glyphIndex);
 }
 
@@ -212,6 +280,8 @@ vdspan<const uint8> ATTrueTypeEncoder::Finalize() {
 			return a.mCh < b.mCh;
 		}
 	);
+
+	EncodeTableGlyfLoca();
 
 	WriteTableHead();
 	WriteTableHhea();
@@ -325,6 +395,9 @@ void ATTrueTypeEncoder::WriteTableHead() {
 	ht.mBBoxX2 = (sint16)mBBoxX2;
 	ht.mBBoxY2 = (sint16)mBBoxY2;
 
+	if (mNeedLongGlyphOffsets)
+		ht.mIndexToLocFormat = 1;
+
 	BeginTable("head");
 	WriteRaw(ht);
 	EndTable();
@@ -354,9 +427,27 @@ void ATTrueTypeEncoder::WriteTableHhea() {
 
 	table.mAscender = mBBoxY2;
 	table.mDescender = (sint16)std::min<sint32>(-1, mBBoxY1);
-	table.mAdvanceWidthMax = mDefaultAdvanceWidth;
-	table.mMinLeftSideBearing = 0;
-	table.mMinRightSideBearing = mDefaultAdvanceWidth - mBBoxX2;
+	table.mAdvanceWidthMax = mMaxAdvanceWidth;
+
+	sint32 minLSB = 0x7FFFFFFF;
+	sint32 minRSB = 0x7FFFFFFF;
+
+	for(const TTFGlyphInfo& glyphInfo : mGlyphs) {
+		// Per Microsoft's TTF 'hhea' docs, glyphs with no contours should be ignored for
+		// LSB/RSB/xMaxExtent calcs.
+		if (glyphInfo.mNumContours == 0)
+			continue;
+
+		const sint32 lsb = glyphInfo.mBBoxX1;
+		const sint32 rsb = glyphInfo.mAdvanceWidth - glyphInfo.mBBoxX2;
+
+		minLSB = std::min<sint32>(minLSB, lsb);
+		minRSB = std::min<sint32>(minRSB, rsb);
+	}
+
+	table.mMinLeftSideBearing = minLSB;
+	table.mMinRightSideBearing = minRSB;
+
 	table.mXMaxExtent = mBBoxX2;
 	table.mNumberOfHMetrics = (uint16)mGlyphs.size();
 
@@ -366,17 +457,16 @@ void ATTrueTypeEncoder::WriteTableHhea() {
 }
 
 void ATTrueTypeEncoder::WriteTableHmtx() {
-	// we only support monospaced fonts, so just set the default font with
-	// no per-glyph metrics
 	BeginTable("hmtx");
 
-	uint16 v[2] {
-		VDToBEU16(mDefaultAdvanceWidth),
-		0
-	};
+	for([[maybe_unused]] const auto& glyph: mGlyphs) {
+		uint16 v[2] {
+			VDToBEU16(glyph.mAdvanceWidth),
+			VDToBEU16(glyph.mBBoxX1),
+		};
 
-	for([[maybe_unused]] const auto& glyph: mGlyphs)
 		WriteRaw(v);
+	}
 
 	EndTable();
 }
@@ -426,6 +516,9 @@ void ATTrueTypeEncoder::WriteTablePost() {
 		vdbe<uint32> mMaxMemType1 = 0;
 		vdbe<uint16> mNumGlyphs = 0;
 	} table;
+
+	if (std::any_of(mGlyphs.begin(), mGlyphs.end(), [mx = mMaxAdvanceWidth](const auto& g) { return g.mAdvanceWidth != mx; }))
+		table.mIsFixedPitch = 0;
 
 	BeginTable("post");
 	WriteRaw(table);
@@ -478,7 +571,14 @@ void ATTrueTypeEncoder::WriteTableOS2() {
 		vdbe<uint16> mUsUpperOpticalPointSize = 0;
 	} table;
 
-	table.mXAvgCharWidth = mDefaultAdvanceWidth;
+	sint32 totalAdvanceWidth = 0;
+
+	for(const TTFGlyphInfo& glyphInfo : mGlyphs)
+		totalAdvanceWidth += glyphInfo.mAdvanceWidth;
+
+	const size_t numGlyphs = mGlyphs.size();
+	table.mXAvgCharWidth = totalAdvanceWidth ? (totalAdvanceWidth + numGlyphs / 2) / numGlyphs : 0;
+
 	table.mYSubscriptXSize = subWidth;
 	table.mYSubscriptYSize = subHeight;
 	table.mYSuperscriptXSize = subWidth;
@@ -491,7 +591,11 @@ void ATTrueTypeEncoder::WriteTableOS2() {
 
 	table.mUsFirstCharIndex = mCharMappings.front().mCh;
 	table.mUsLastCharIndex = mCharMappings.back().mCh;
-	table.mUsDefaultChar = mDefaultChar;
+
+	// Use glyph 0. This cannot otherwise map to glyph 0; Font Validator skips
+	// glyph 0 when computing ranges for the cmap.
+	table.mUsDefaultChar = 0;
+
 	table.mUsBreakChar = mBreakChar;
 
 	BeginTable("OS/2");
@@ -562,7 +666,7 @@ void ATTrueTypeEncoder::WriteTableCmap() {
 			while(encodeLen < segmentLen) {
 				++encodeLen;
 
-				if (segmentMappings[encodeLen].GetOffset() == segmentMappings[encodeLen-1].GetOffset()) {
+				if (encodeLen < segmentLen && segmentMappings[encodeLen].GetOffset() == segmentMappings[encodeLen-1].GetOffset()) {
 					++runLength;
 
 					if (runLength >= 8) {
@@ -653,18 +757,14 @@ void ATTrueTypeEncoder::WriteTableCmap() {
 	EndTable();
 }
 
-void ATTrueTypeEncoder::WriteTableGlyfLoca() {
+void ATTrueTypeEncoder::EncodeTableGlyfLoca() {
 	const size_t numGlyphs = mGlyphs.size();
-	vdblock<vdbe<uint16>> glyphOffsets(numGlyphs + 1);
-
-	const auto basePosition = mTableBuffer.size();
-
-	BeginTable("glyf");
+	mGlyphOffsets.resize(numGlyphs + 1);
 
 	for(size_t i = 0; i < numGlyphs; ++i) {
 		const TTFGlyphInfo& glyph = mGlyphs[i];
 		
-		glyphOffsets[i] = (uint16)((mTableBuffer.size() - basePosition) >> 1);
+		mGlyphOffsets[i] = (uint32)mGlyphBuffer.size();
 
 		// if there are no contours, write an empty glyph block
 		if (!glyph.mNumContours)
@@ -697,7 +797,7 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 			header.mYMax = (sint16)glyph.mBBoxY2;
 		}
 
-		WriteRaw(header);
+		mGlyphBuffer.append_range(vdspan((const uint8 *)&header, sizeof header));
 		
 		// check if non-empty simple or composite glyph
 		if (glyph.mNumContours > 0) {
@@ -709,12 +809,12 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 				if (points[j].mbEndContour) {
 					vdbe<uint16> endPos = (uint16)j;
 
-					WriteRaw(endPos);
+					mGlyphBuffer.append_range(vdspan((const uint8 *)&endPos, sizeof endPos));
 				}
 			}
 
 			vdbe<uint16> numInstructions = 0;
-			WriteRaw(numInstructions);
+			mGlyphBuffer.append_range(vdspan((const uint8 *)&numInstructions, sizeof numInstructions));
 
 			// write flags
 			static constexpr uint8 kFlagReserved = 0x80;
@@ -761,15 +861,15 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 					++lastRepeatCount;
 
 					if (lastRepeatCount == 1)
-						mTableBuffer.push_back(flags);
+						mGlyphBuffer.push_back(flags);
 					else {
 						if (lastRepeatCount == 2)
-							*(mTableBuffer.end() - 2) = flags | kFlagRepeat;
+							*(mGlyphBuffer.end() - 2) = flags | kFlagRepeat;
 
-						mTableBuffer.back() = lastRepeatCount;
+						mGlyphBuffer.back() = lastRepeatCount;
 					}
 				} else {
-					mTableBuffer.push_back(flags);
+					mGlyphBuffer.push_back(flags);
 					lastFlags = flags;
 					lastRepeatCount = 0;
 				}
@@ -788,10 +888,10 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 					sint32 adx = abs(dx);
 
 					if (adx < 256) {
-						mTableBuffer.push_back((uint8)adx);
+						mGlyphBuffer.push_back((uint8)adx);
 					} else {
-						mTableBuffer.push_back((uint8)(dx >> 8));
-						mTableBuffer.push_back((uint8)dx);
+						mGlyphBuffer.push_back((uint8)(dx >> 8));
+						mGlyphBuffer.push_back((uint8)dx);
 					}
 				}
 
@@ -808,10 +908,10 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 					sint32 ady = abs(dy);
 
 					if (ady < 256) {
-						mTableBuffer.push_back((uint8)ady);
+						mGlyphBuffer.push_back((uint8)ady);
 					} else {
-						mTableBuffer.push_back((uint8)(dy >> 8));
-						mTableBuffer.push_back((uint8)dy);
+						mGlyphBuffer.push_back((uint8)(dy >> 8));
+						mGlyphBuffer.push_back((uint8)dy);
 					}
 				}
 
@@ -831,12 +931,16 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 				vdbe<sint8> mYOffset;
 			};
 
+			static_assert(sizeof(ShortRef) == 6);
+
 			struct LongRef {
 				vdbe<uint16> mFlags;
 				vdbe<uint16> mGlyphIndex;
 				vdbe<sint16> mXOffset;
 				vdbe<sint16> mYOffset;
 			};
+
+			static_assert(sizeof(LongRef) == 8);
 
 			const TTFGlyphReference *glyphRefs = &mGlyphReferences[glyph.mStartIndex];
 
@@ -856,7 +960,7 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 					shortRef.mXOffset = (sint8)glyphRef.mOffsetX;
 					shortRef.mYOffset = (sint8)glyphRef.mOffsetY;
 
-					WriteRaw(shortRef);
+					mGlyphBuffer.append_range(vdspan((const uint8 *)&shortRef, sizeof shortRef));
 				} else {
 					LongRef longRef;
 					longRef.mFlags = baseFlags | kFlagArg12Words;
@@ -864,24 +968,56 @@ void ATTrueTypeEncoder::WriteTableGlyfLoca() {
 					longRef.mXOffset = (sint16)glyphRef.mOffsetX;
 					longRef.mYOffset = (sint16)glyphRef.mOffsetY;
 
-					WriteRaw(longRef);
+					mGlyphBuffer.append_range(vdspan((const uint8 *)&longRef, sizeof longRef));
 				}
 			}
 		}
 
-		// dword alignment
-		if (size_t tail = (4 - mTableBuffer.size()) & 3) {
+		// Dword alignment
+		//
+		// TTF only requires alignment to word boundaries. Earlier versions of the OpenType
+		// spec recommended dword alignment for better performance on some processors; this
+		// was subsequently removed in the 1.8.4 spec. Not that we expect anyone to use
+		// these fonts on a 68020, but it's cheap and it makes Font Validator happy.
+		//
+		if (size_t tail = (4 - mGlyphBuffer.size()) & 3) {
 			while(tail--)
-				mTableBuffer.push_back(0);
+				mGlyphBuffer.push_back(0);
 		}
 	}
 	
-	glyphOffsets.back() = (uint16)((mTableBuffer.size() - basePosition) >> 1);
+	mGlyphOffsets.back() = (uint32)mGlyphBuffer.size();
+
+	// There are two encodings for glyph offsets, 16-bit word offsets or 32-bit
+	// byte offsets. Therefore, we need a long offset whenever the last offset
+	// exceeds 128K.
+	mNeedLongGlyphOffsets = mGlyphOffsets.back() >= 0x20000;
+}
+
+void ATTrueTypeEncoder::WriteTableGlyfLoca() {
+	// Font Validator recommends that the 'loca' table be written for 'glyf' for efficiency.
+	BeginTable("loca");
+	if (mNeedLongGlyphOffsets) {
+		// write 32-bit BE byte offsets
+		for(uint32& v : mGlyphOffsets)
+			v = VDToBEU32(v);
+
+		WriteRaw(mGlyphOffsets.data(), mGlyphOffsets.size() * sizeof(mGlyphOffsets[0]));
+	} else {
+		// convert 32-bit byte offsets to 16-bit BE word offsets
+		const size_t n = mGlyphOffsets.size();
+		vdfastvector<uint16> glyphOffsets16(n);
+
+		for(size_t i = 0; i < n; ++i)
+			glyphOffsets16[i] = VDToBE16(mGlyphOffsets[i] >> 1);
+
+		WriteRaw(glyphOffsets16.data(), glyphOffsets16.size() * sizeof(glyphOffsets16[0]));
+	}
 
 	EndTable();
 
-	BeginTable("loca");
-	WriteRaw(glyphOffsets.data(), glyphOffsets.size() * sizeof(glyphOffsets[0]));
+	BeginTable("glyf");
+	WriteRaw(mGlyphBuffer.data(), mGlyphBuffer.size());
 	EndTable();
 }
 

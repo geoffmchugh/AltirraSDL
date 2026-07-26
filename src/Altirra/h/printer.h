@@ -120,7 +120,9 @@ protected:
 	};
 
 	struct RenderedLine {
-		vdfastvector<uint8> mDotPatterns;
+		static constexpr uint32 kCharBit = UINT32_C(0x80000000);
+
+		vdfastvector<uint32> mDotPatternsOrChars;
 		vdfastvector<float> mPositions;
 		RenderLineParams mParams;
 
@@ -128,9 +130,23 @@ protected:
 		uint32 TrimZeroAtEnd();
 	};
 
-	RenderedLine *BeginRenderLine(uint32 width);
+	enum class FontUploadStyle : uint8 {
+		Normal,
+
+		// Merge each column into the next column, including adding one new column
+		// if needed.
+		BoldOneOver,
+
+		// Duplicate each column into another half-step column to the right.
+		BoldDuplicate
+	};
+
+	uint32 UploadFont(const ATPrinterFontDesc& desc, const uint8 *fontData, float xStep, float xAdvance, FontUploadStyle style, vdspan<const uint32> uniChars);
+
+	RenderedLine *BeginRenderLine(uint32 entries);
 	void EndRenderLine(const RenderLineParams& params);
-	void RenderLineWithFont(const ATPrinterFontDesc& desc, const uint8 *fontData, uint8 *charData, uint32 n, float x, float xStep, float xSpacing, bool bold, const RenderLineParams& param);
+	void RenderLineWithFont(const ATPrinterFontDesc& desc, const uint8 *fontData, const uint8 *charData, uint32 n, float x, float xStep, float xSpacing, bool bold, const RenderLineParams& param);
+	void RenderLineWithChars(uint32 charBase, const ATPrinterFontDesc& desc, vdspan<const uint8> charData, float x, const RenderLineParams& param);
 	void FlushRenderedLines(bool fromCIO);
 	void BeginAsyncPrinting();
 	void EndAsyncPrinting();
@@ -217,12 +233,21 @@ public:
 
 	void GetDeviceInfo(ATDeviceInfo& info) override;
 
+	void OnCreatedGraphicalOutput() override;
 	ATPrinterGraphicsSpec GetGraphicsSpec() const override;
 	bool IsSupportedDeviceId(uint8 id) const override;
 	bool IsSupportedOrientation(uint8 aux1) const override;
 	uint8 GetWidthForOrientation(uint8 aux1) const override;
 	void GetStatusFrameInternal(uint8 frame[4]) override;
 	void HandleFrameInternal(uint8 orientation, uint8 *buf, uint32 len, bool graphics) override;
+
+private:
+	static constexpr float kXStartMM = 8.19750786f;
+	static constexpr float kXStepMM = 0.3606987f;
+	static constexpr float kXSpacingMM = 0.275780499f;
+
+	uint32 mCharBaseNormal = 0;
+	uint32 mCharBaseSideways = 0;
 };
 
 class ATDevicePrinter1025 final : public ATDevicePrinterBase {
@@ -233,6 +258,7 @@ public:
 	void GetDeviceInfo(ATDeviceInfo& info) override;
 	void ColdReset() override;
 
+	void OnCreatedGraphicalOutput() override;
 	void InitSIOReceiveTimeout() override;
 	ATPrinterGraphicsSpec GetGraphicsSpec() const override;
 	bool IsSupportedDeviceId(uint8 id) const override;
@@ -245,6 +271,15 @@ private:
 	void FlushLine(bool graphics);
 	void UpdateLineLength();
 	void ResetState();
+
+	// The 1025 character cell at normal with is 12 columns per character with
+	// 10 characters per inch, 9 columns of which are used for the character.
+	// The distance between columns is close to 1/12, estimated from firmware
+	// timings.
+	static constexpr float kXStartMM = 6.31359720f;
+	static constexpr float kXStep10CpiMM = 0.21192742f;
+	static constexpr float kXAdvance10CpiMM  = 2.54f;
+	static constexpr float kXSpacing10CpiMM = kXAdvance10CpiMM - kXStep10CpiMM*9;
 
 	uint8 mColumn = 0;
 	uint8 mLineLength = 0;
@@ -262,6 +297,10 @@ private:
 	bool mbShortLine = false;
 	bool mbLastLineContinued = false;
 
+	uint32 mCharBase10Cpi = 0;
+	uint32 mCharBase5Cpi = 0;
+	uint32 mCharBase16_5Cpi = 0;
+
 	uint8 mRawLineBuffer[133] {};
 	wchar_t mUnicodeLineBuffer[133] {};
 };
@@ -274,6 +313,7 @@ public:
 	void GetDeviceInfo(ATDeviceInfo& info) override;
 	void ColdReset() override;
 
+	void OnCreatedGraphicalOutput() override;
 	ATPrinterGraphicsSpec GetGraphicsSpec() const override;
 	bool IsSupportedDeviceId(uint8 id) const override;
 	bool IsSupportedOrientation(uint8 aux1) const override;
@@ -285,6 +325,9 @@ private:
 	void FlushLine(bool graphics);
 	void ResetState();
 	void ClearLineBuffer();
+
+	static constexpr float kLeftMarginMM = 0.25f * 25.4f;
+	static constexpr float kXStep = 8.0f / 480.0f * 25.4f;
 
 	uint32 mDotColumn = 0;
 
@@ -307,6 +350,9 @@ private:
 
 	bool mbAnyUnderlines = false;
 
+	uint32 mCharBaseNormal = 0;
+	uint32 mCharBaseElongated = 0;
+
 	uint8 mRawLineBuffer[81] {};
 	wchar_t mUnicodeLineBuffer[81] {};
 
@@ -319,8 +365,8 @@ private:
 	// right margin, but those columns can then get printed when underlining
 	// is enabled. With an elongated character this results in two extra
 	// columns being printed.
-	uint8 mDotBuffer[480] {};
-	uint8 mUnderlineBuffer[482] {};
+	uint32 mDotBuffer[480] {};
+	uint32 mUnderlineBuffer[482] {};
 };
 
 class ATDevicePrinter825 final : public ATDeviceT<IATPrinterOutput> {
@@ -355,6 +401,8 @@ private:
 	void PrintColumn(uint32 pins);
 	void ForceEOL();
 	void ApplyDensity();
+
+	static constexpr float kLeftMarginMM = 8.0f;
 
 	uint32 mDotColumn = 0;
 	uint32 mMaxColumns = 0;

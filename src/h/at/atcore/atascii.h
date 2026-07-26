@@ -1,5 +1,5 @@
 //	Altirra - Atari 800/800XL/5200 emulator
-//	Core library - generic bus signal implementation
+//	Core library
 //	Copyright (C) 2023 Avery Lee
 //
 //	This program is free software; you can redistribute it and/or modify

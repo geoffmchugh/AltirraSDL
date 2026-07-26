@@ -225,3 +225,33 @@ Upstream test13 now carries the same `-raw2.x` correction, so this is no
 longer a fork-only delta after the test12 → test13 sync. Keep this note as
 historical context if future upstream snapshots touch the same clipping
 block.
+
+---
+
+## Test15 local merge notes
+
+The test14 → test15 merge keeps or adds five deliberate differences from
+upstream:
+
+- `src/Altirra/source/printerexport.cpp` keeps `LinkedPointHash::operator()`
+  as a non-static `const` member because the upstream C++23 static call
+  operator is not accepted by the GCC 12 CI floor.
+- `src/Altirra/source/printeroutput.cpp` includes
+  `<vd2/system/error.h>` with the filesystem's actual lowercase spelling.
+- `src/Altirra/source/printerexport.cpp` removes a duplicate
+  `EndSimpleGlyph()` call, correctly validates and encodes Unicode scalars,
+  preserves `/Length1` only where required for TrueType streams, and keeps
+  the required Type 0, CIDFont, and font descriptor names consistent while
+  adding matching optional PostScript names to the embedded TrueType fonts.
+- `src/Altirra/source/printer.cpp` recognizes both normal and elongated 1029
+  space-character IDs when trimming trailing print data, and does not shift
+  tracked characters left by one dot radius relative to the fallback dot
+  renderer.
+- `src/Altirra/source/printeroutput.cpp` invokes the horizontal-move callback
+  rather than the vertical callback when `Clear()` reports the horizontal
+  head position, and includes the left dot extent in character font bounds.
+
+The SDL debugger's SVG exporter also uses `ExtractNextLineAsDots()` after
+test15 split the old `ExtractNextLine()` API into dot-only and
+dot-or-character variants. This exporter emits SVG geometry, so expanding
+known characters back into dots is intentional.
