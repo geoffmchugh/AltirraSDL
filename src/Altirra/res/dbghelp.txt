@@ -1703,16 +1703,21 @@
 
     Disassemble a range of memory as CPU instructions to a file.
     
-      .dumpdsm [-c] [-l] [-p] [-n] [-s] [-t] <filename> <addr> L<length>
+      .dumpdsm [-c] [-l] [-p] [-n] [-s] [-t] [-m mode]
+            <filename> <addr> L<length>
       
     The following options can be specified:
     
       -c    Include code bytes.
       -l    Use lowercase opcode names.
+      -m    Override disassembly mode
       -n    Do not decode labels.
       -p    Include PC address.
       -s    Separate routines with blank lines after jumps and returns.
       -t    Use 4 character tabs.
+
+    -m override the disassembly CPU mode. See the disassemble (u) command
+    for the list of supported CPU modes.
 
 + .dumpsnap    Create bootable snapshot image
 

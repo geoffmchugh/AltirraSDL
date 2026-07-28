@@ -699,6 +699,33 @@ bool RenderPrinterHLEConfig(ATPropertySet& props, ATDeviceConfigState& st) {
 }
 
 // =========================================================================
+// Epson FX-80/FX-80+ printer — DIP-switch settings
+// =========================================================================
+
+bool RenderPrinterFX80Config(ATPropertySet& props, ATDeviceConfigState& st) {
+	if (st.justOpened) {
+		st.check[0] = props.GetBool("slashed_zero", false);
+		st.check[1] = props.GetBool("auto_lf", false);
+	}
+
+	ImGui::Checkbox("SW1-2 Enable slashed zero", &st.check[0]);
+	ImGui::Checkbox("SW2-4 Automatic line feed (LF on CR)", &st.check[1]);
+
+	ImGui::Separator();
+	if (ImGui::Button("OK", ImVec2(120, 0))) {
+		props.Clear();
+		if (st.check[0]) props.SetBool("slashed_zero", true);
+		if (st.check[1]) props.SetBool("auto_lf", true);
+		return true;
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Cancel", ImVec2(120, 0)))
+		g_devCfg.Reset();
+
+	return false;
+}
+
+// =========================================================================
 // Percom disk controller — FDC type + drive types + drive ID
 // =========================================================================
 

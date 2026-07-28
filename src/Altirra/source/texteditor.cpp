@@ -2098,7 +2098,7 @@ Iterator TextEditor::PixelToPos(int px, int py) {
 	int offset = 0;
 	int xp = 0;
 
-	if (px) {
+	if (px > 0) {
 		HDC hdc = GetDC(mhwnd);
 		if (hdc) {
 			if (int state = SaveDC(hdc)) {

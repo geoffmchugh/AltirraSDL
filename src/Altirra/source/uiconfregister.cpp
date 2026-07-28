@@ -60,6 +60,7 @@ bool ATUIConfDevVideoStillImage(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDevNetSerial(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDevPrinter(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDevPrinterHLE(VDGUIHandle hParent, ATPropertySet& props);
+bool ATUIConfDevPrinterFX80(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDev850Full(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDev1020(VDGUIHandle hParent, ATPropertySet& props);
 bool ATUIConfDevMultiplexer(VDGUIHandle hParent, ATPropertySet& props);
@@ -113,6 +114,7 @@ void ATRegisterDeviceConfigurers(ATDeviceManager& dev) {
 	dev.AddDeviceConfigurer("1025", ATUIConfDevPrinter);
 	dev.AddDeviceConfigurer("1029", ATUIConfDevPrinter);
 	dev.AddDeviceConfigurer("printer", ATUIConfDevPrinterHLE);
+	dev.AddDeviceConfigurer("fx80", ATUIConfDevPrinterFX80);
 	dev.AddDeviceConfigurer("850full", ATUIConfDev850Full);
 	dev.AddDeviceConfigurer("1020", ATUIConfDev1020);
 	dev.AddDeviceConfigurer("multiplexer", ATUIConfDevMultiplexer);

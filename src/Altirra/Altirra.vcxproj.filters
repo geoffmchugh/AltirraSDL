@@ -1135,6 +1135,33 @@
     <ClCompile Include="source\printerexport.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="source\autosuggest.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\uidbghistory.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\uiautosuggest.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\cmdedit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\uiquickbar.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\uicommandicons.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\printerfontfx80.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\printerfx80.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\uiconfdevprinterfx80.cpp">
+      <Filter>Source Files - Device Configuration UI</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="h\antic.h">
@@ -1870,6 +1897,24 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="h\printerexport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\autosuggest.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\uiautosuggest.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\uiquickbar.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\uicommandicons.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\printerfx80.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="h\printerfontfx80.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -6970,6 +6970,31 @@ void ATConsoleCmdBreakptExpr(ATDebuggerCmdParser& parser) {
 		ATConsoleWrite("Warning: Per-instruction breakpoint set. Execution will be slow.\n");
 }
 
+namespace {
+	ATDebugDisasmMode ParseDisasmModeOverride(ATDebugDisasmMode mode, const ATDebuggerCmdSwitchStrArg& modeArg) {
+		if (modeArg.IsValid()) {
+			VDStringSpanA modeStr(modeArg.GetValue());
+
+			if (!modeStr.comparei("6502"))
+				mode = kATDebugDisasmMode_6502;
+			else if (!modeStr.comparei("65c02"))
+				mode = kATDebugDisasmMode_65C02;
+			else if (!modeStr.comparei("65c816"))
+				mode = kATDebugDisasmMode_65C816;
+			else if (!modeStr.comparei("z80"))
+				mode = kATDebugDisasmMode_Z80;
+			else if (!modeStr.comparei("8048"))
+				mode = kATDebugDisasmMode_8048;
+			else if (!modeStr.comparei("6809"))
+				mode = kATDebugDisasmMode_6809;
+			else
+				throw MyError("Unsupported disassembly mode: %s", modeArg.GetValue());
+		}
+
+		return mode;
+	}
+}
+
 void ATConsoleCmdUnassemble(ATDebuggerCmdParser& parser) {
 	ATDebuggerCmdSwitch noPredictArg("p", false);
 	ATDebuggerCmdSwitch m8Arg("m8", false);
@@ -6998,26 +7023,7 @@ void ATConsoleCmdUnassemble(ATDebuggerCmdParser& parser) {
 	uint32 n = length;
 
 	IATDebugTarget *target = g_debugger.GetTarget();
-	ATDebugDisasmMode disasmMode = target->GetDisasmMode();
-
-	if (modeArg.IsValid()) {
-		VDStringSpanA modeStr(modeArg.GetValue());
-
-		if (!modeStr.comparei("6502"))
-			disasmMode = kATDebugDisasmMode_6502;
-		else if (!modeStr.comparei("65c02"))
-			disasmMode = kATDebugDisasmMode_65C02;
-		else if (!modeStr.comparei("65c816"))
-			disasmMode = kATDebugDisasmMode_65C816;
-		else if (!modeStr.comparei("z80"))
-			disasmMode = kATDebugDisasmMode_Z80;
-		else if (!modeStr.comparei("8048"))
-			disasmMode = kATDebugDisasmMode_8048;
-		else if (!modeStr.comparei("6809"))
-			disasmMode = kATDebugDisasmMode_6809;
-		else
-			throw MyError("Unsupported disassembly mode: %s", modeArg.GetValue());
-	}
+	ATDebugDisasmMode disasmMode = ParseDisasmModeOverride(target->GetDisasmMode(), modeArg);
 
 	ATCPUExecState state;
 	target->GetExecState(state);
@@ -9260,8 +9266,9 @@ void ATConsoleCmdDumpDsm(ATDebuggerCmdParser& parser) {
 	ATDebuggerCmdSwitch lcopsArg("l", false);
 	ATDebuggerCmdSwitch sepArg("s", false);
 	ATDebuggerCmdSwitch tabsArg("t", false);
+	ATDebuggerCmdSwitchStrArg modeArg("m");
 
-	parser >> codeBytesArg >> pcAddrArg >> noLabelsArg >> lcopsArg >> sepArg >> tabsArg >> filename >> addrArg >> lenArg >> 0;
+	parser >> codeBytesArg >> pcAddrArg >> noLabelsArg >> lcopsArg >> sepArg >> tabsArg >> filename >> addrArg >> lenArg >> modeArg >> 0;
 
 	uint32 addr = addrArg.GetValue();
 	uint32 addrEnd = addr + lenArg;
@@ -9285,7 +9292,7 @@ void ATConsoleCmdDumpDsm(ATDebuggerCmdParser& parser) {
 	IATDebugTarget *const target = g_debugger.GetTarget();
 	ATDisassembleCaptureRegisterContext(target, hent);
 
-	const ATDebugDisasmMode disasmMode = target->GetDisasmMode();
+	const ATDebugDisasmMode disasmMode = ParseDisasmModeOverride(target->GetDisasmMode(), modeArg);
 
 	uint32 pc = addr;
 	while(pc < addrEnd) {	

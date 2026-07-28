@@ -17,6 +17,7 @@ This prerelease version:
    * Debugger: @value now works within read access breakpoint conditions and actions.
    * Debugger: ln command has options for specific read/write/execute symbol lookups.
    * Devices: Added Karin Maxi Drive.
+   * Devices: Add Device UI now has a checkbox to show all devices for browsing.
    * Disk: Added option to reinterleave disks to 815 16:1 DD interleave.
    * Display: Added support for rendering to Wide Color Gamut (WCG) displays without HDR support.
    * GTIA: Added emulation of known defective GTIA types.
@@ -26,6 +27,7 @@ This prerelease version:
    * Printer: Added SVG and specifically sized PDF export.
    * Printer: Added 1020 options for accurate line stepping behavior, accurate timing, and sounds.
    * Printer: PDF export now preserves characters when printed from HLE printer devices.
+   * Printer: Added Epson FX-80+ emulation.
    * Simulator: Added option to write text files with LF line endings.
    * UI: Removed inner edge on display window when there are no other docked panes visible.
    * UI: Files can now be dragged from folders mapped with the H: device to paste in the emulated path to the file.

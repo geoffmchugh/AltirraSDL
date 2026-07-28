@@ -146,6 +146,7 @@ static const DeviceCatalogEntry kSerialDevices[] = {
 
 static const DeviceCatalogEntry kParallelDevices[] = {
 	{ "825",            "825 80-Column Printer", "80 column dot-matrix printer with parallel port." },
+	{ "fx80",           "Epson FX-80+ Printer", "80 column parallel-port dot-matrix printer with graphics support." },
 	{ "parfilewriter",  "File writer", "Writes all data from a parallel or serial port to a file." },
 	{ "par2ser",        "Parallel to serial adapter", "Connects a parallel port output to a serial input." },
 };

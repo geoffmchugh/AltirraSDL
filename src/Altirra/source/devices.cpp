@@ -124,6 +124,7 @@ extern const ATDeviceDefinition g_ATDeviceDefPrinter1029;
 extern const ATDeviceDefinition g_ATDeviceDefPrinter1029Full;
 extern const ATDeviceDefinition g_ATDeviceDefPrinter825;
 extern const ATDeviceDefinition g_ATDeviceDefPrinter1020;
+extern const ATDeviceDefinition g_ATDeviceDefPrinterFX80;
 extern const ATDeviceDefinition g_ATDeviceDef850Full;
 extern const ATDeviceDefinition g_ATDeviceDefThePill;
 extern const ATDeviceDefinition g_ATDeviceDefMultiplexer;
@@ -234,6 +235,7 @@ void ATRegisterDevices(ATDeviceManager& dm) {
 		&g_ATDeviceDefPrinter1029Full,
 		&g_ATDeviceDefPrinter825,
 		&g_ATDeviceDefPrinter1020,
+		&g_ATDeviceDefPrinterFX80,
 		&g_ATDeviceDefThePill,
 		&g_ATDeviceDefMultiplexer,
 		&g_ATDeviceDefPipeSerial,

@@ -675,6 +675,7 @@
 #define IDC_FSKSPEEDCOMPENSATION        1217
 #define IDC_INTENSITY_COMPENSATION      1217
 #define IDC_TEXTOUTPUTLF                1217
+#define IDC_SHOWUNAVAILABLE             1217
 #define IDC_ACCESS_NONE                 1218
 #define IDC_CHECK2                      1218
 #define IDC_IGNOREALL                   1218

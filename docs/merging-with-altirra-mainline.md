@@ -255,3 +255,14 @@ The SDL debugger's SVG exporter also uses `ExtractNextLineAsDots()` after
 test15 split the old `ExtractNextLine()` API into dot-only and
 dot-or-character variants. This exporter emits SVG geometry, so expanding
 known characters back into dots is intentional.
+
+---
+
+## Test16 local merge note
+
+`src/h/at/atcore/enumutils.h` keeps the fork's `vd_to_underlying()` helper
+instead of changing the enum-flag macros to upstream's C++23
+`std::to_underlying()`. The helper keeps the shared headers usable by the
+fork's C++20-capable build configurations. Test16's new `constexpr` on the
+operators is retained; preserve both the `constexpr` qualifiers and the local
+helper on future merges.

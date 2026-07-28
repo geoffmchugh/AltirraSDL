@@ -32,12 +32,12 @@ constexpr auto vd_to_underlying(T v) noexcept {
 #define AT_IMPLEMENT_ENUM_FLAGS(T) AT_IMPLEMENT_ENUM_FLAGS2(T,inline)
 #define AT_IMPLEMENT_ENUM_FLAGS_FRIEND_STATIC(T) AT_IMPLEMENT_ENUM_FLAGS2(T,inline friend)
 #define AT_IMPLEMENT_ENUM_FLAGS2(T,mode) \
-	mode bool operator!(T x) { return x == T{}; } \
-	mode auto operator+(T x) { return vd_to_underlying(x); } \
-	mode T operator~(T x) { return T(~vd_to_underlying(x)); } \
-	mode T operator&(T x, T y) { return T(vd_to_underlying(x) & vd_to_underlying(y)); } \
-	mode T operator|(T x, T y) { return T(vd_to_underlying(x) | vd_to_underlying(y)); } \
-	mode T& operator&=(T& x, T y) { x = T(vd_to_underlying(x) & vd_to_underlying(y)); return x; } \
-	mode T& operator|=(T& x, T y) { x = T(vd_to_underlying(x) | vd_to_underlying(y)); return x; }
+	mode constexpr bool operator!(T x) { return x == T{}; } \
+	mode constexpr auto operator+(T x) { return vd_to_underlying(x); } \
+	mode constexpr T operator~(T x) { return T(~vd_to_underlying(x)); } \
+	mode constexpr T operator&(T x, T y) { return T(vd_to_underlying(x) & vd_to_underlying(y)); } \
+	mode constexpr T operator|(T x, T y) { return T(vd_to_underlying(x) | vd_to_underlying(y)); } \
+	mode constexpr T& operator&=(T& x, T y) { x = T(vd_to_underlying(x) & vd_to_underlying(y)); return x; } \
+	mode constexpr T& operator|=(T& x, T y) { x = T(vd_to_underlying(x) | vd_to_underlying(y)); return x; }
 
 #endif

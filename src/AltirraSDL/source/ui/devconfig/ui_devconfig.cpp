@@ -274,6 +274,7 @@ static bool DispatchDeviceDialog(const char *tag, ATPropertySet& props, ATDevice
 		return RenderPrinterConfig(props, st);
 	if (!strcmp(tag, "printer")) return RenderPrinterHLEConfig(props, st);
 	if (!strcmp(tag, "1020")) return Render1020Config(props, st);
+	if (!strcmp(tag, "fx80")) return RenderPrinterFX80Config(props, st);
 
 	// Multiplexer
 	if (!strcmp(tag, "multiplexer")) return RenderMultiplexerConfig(props, st);

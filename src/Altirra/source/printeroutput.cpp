@@ -458,7 +458,7 @@ void ATPrinterGraphicalOutput::ExtractNextLineDots(vdfastvector<RenderDot>& rend
 		// pre-cull pins on the print head -- the tricky part is that the head may be upside-down
 		uint32 dotMask = (UINT32_C(2) << (this->mHeadPinCount - 1)) - 1;
 
-		if (mDotStepY > 0) {
+		if (mDotStepY > 0) {			// bit 0 is top
 			// check if first dot is entirely above the clip rect
 			const float firstDotY2 = firstDotY + dotRadius;
 			if (firstDotY2 <= docRowY1) {
@@ -482,29 +482,29 @@ void ATPrinterGraphicalOutput::ExtractNextLineDots(vdfastvector<RenderDot>& rend
 				else
 					dotMask &= dotMask >> bottomDotsToCull;
 			}
-		} else if (mDotStepY < 0) {
+		} else if (mDotStepY < 0) {		// bit 0 is bottom
 			// check if first dot is entirely below the clip rect
 			const float firstDotY1 = firstDotY - dotRadius;
 			if (firstDotY1 >= docRowY2) {
 				// compute how many dots to trim off
-				int bottomDotsToCull = 1 + (int)((firstDotY1 - docRowY2) / mDotStepY);
+				int bottomDotsToCull = 1 + (int)((docRowY2 - firstDotY1) / mDotStepY);
 
 				if (bottomDotsToCull >= mHeadPinCount)
 					dotMask = 0;
 				else
-					dotMask >>= bottomDotsToCull;
+					dotMask &= dotMask << bottomDotsToCull;
 			}
 
 			// check if the last dot is entirely above the clip rect
 			const float lastDotY2 = firstDotY + mDotStepY * (float)(mHeadPinCount - 1) + dotRadius;
 			if (lastDotY2 <= docRowY1) {
 				// compute how many dots to trim off
-				int topDotsToCull = 1 + (int)((docRowY1 - lastDotY2) / mDotStepY);
+				int topDotsToCull = 1 + (int)((lastDotY2 - docRowY1) / mDotStepY);
 
 				if (topDotsToCull >= mHeadPinCount)
 					dotMask = 0;
 				else
-					dotMask &= dotMask << topDotsToCull;
+					dotMask &= dotMask >> topDotsToCull;
 			}
 		}
 

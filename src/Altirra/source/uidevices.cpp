@@ -59,10 +59,12 @@ protected:
 	void OnItemSelectionChanged(VDUIProxyTreeViewControl *sender, int);
 	void UpdateHelpText();
 	void AppendRTF(VDStringA& rtf, const wchar_t *text);
+	void RefreshDeviceTree();
 
 	const vdfunction<bool(const char *)>& mFilter;
 	VDUIProxyTreeViewControl mTreeView;
 	VDUIProxyRichEditControl mHelpView;
+	VDUIProxyButtonControl mShowUnavailableView;
 	VDDelegate mDelItemSelChanged;
 	const char *mpDeviceTag;
 	const wchar_t *mpLastHelpText;
@@ -81,7 +83,7 @@ protected:
 
 	class TreeNode : public vdrefcounted<IVDUITreeViewVirtualItem> {
 	public:
-		TreeNode(const TreeEntry& node) : mNode(node) {}
+		TreeNode(const TreeEntry& node, bool passesFilter) : mNode(node), mbPassesFilter(passesFilter) {}
 
 		void *AsInterface(uint32 id) { return nullptr; }
 
@@ -90,8 +92,10 @@ protected:
 		}
 
 		const TreeEntry& mNode;
+		const bool mbPassesFilter;
 	};
 
+	static inline bool sShowUnavailable = false;;
 	static const CategoryEntry kCategories[];
 };
 
@@ -321,6 +325,9 @@ const ATUIDialogDeviceNew::CategoryEntry ATUIDialogDeviceNew::kCategories[]={
 		{
 			{ "825", L"825 80-Column Printer",
 				L"80 column dot-matrix printer with a parallel port connection. Based on the Centronics 737 printer."
+			},
+			{ "fx80", L"Epson FX-80+ Printer",
+				L"80 column parallel-port dot-matrix printer with graphics support."
 			},
 			{ "parfilewriter", L"File writer",
 				L"Writes all data output from a parallel or serial port to a file."
@@ -641,14 +648,28 @@ ATUIDialogDeviceNew::ATUIDialogDeviceNew(const vdfunction<bool(const char *)>& f
 	, mpLastHelpText(nullptr)
 {
 	mTreeView.OnItemSelectionChanged() += mDelItemSelChanged.Bind(this, &ATUIDialogDeviceNew::OnItemSelectionChanged);
+
+	mShowUnavailableView.SetOnClicked(
+		[this] {
+			const bool show = mShowUnavailableView.GetChecked();
+
+			if (sShowUnavailable != show) {
+				sShowUnavailable = show;
+
+				RefreshDeviceTree();
+			}
+		}
+	);
 }
 
 bool ATUIDialogDeviceNew::OnLoaded() {
 	AddProxy(&mTreeView, IDC_TREE);
 	AddProxy(&mHelpView, IDC_HELP_INFO);
+	AddProxy(&mShowUnavailableView, IDC_SHOWUNAVAILABLE);
 
 	mResizer.Add(IDC_HELP_INFO, mResizer.kML | mResizer.kSuppressFontChange);
 	mResizer.Add(IDC_TREE, mResizer.kMC);
+	mResizer.Add(mShowUnavailableView.GetHandle(), mResizer.kBL);
 	mResizer.Add(IDOK, mResizer.kBR);
 	mResizer.Add(IDCANCEL, mResizer.kBR);
 
@@ -657,7 +678,7 @@ bool ATUIDialogDeviceNew::OnLoaded() {
 	mHelpView.SetReadOnlyBackground();
 
 	VDStringA s;
-	
+
 	s = "{\\rtf";
 
 	const uint32 fg = ATUIGetThemeColors().mStaticFg;
@@ -673,33 +694,8 @@ bool ATUIDialogDeviceNew::OnLoaded() {
 
 	mHelpView.SetTextRTF(s.c_str());
 
-	mTreeView.SetRedraw(false);
+	RefreshDeviceTree();
 
-	for(const auto& category : kCategories) {
-		if (mFilter && !mFilter(category.mpTag))
-			continue;
-
-		VDUIProxyTreeViewControl::NodeRef catNode = mTreeView.AddItem(mTreeView.kNodeRoot, mTreeView.kNodeLast, category.mpText);
-
-		vdfastvector<const TreeEntry *> devs;
-
-		for(const auto& device : category.mDevices)
-			devs.push_back(&device);
-
-		std::ranges::sort(
-			devs,
-			[](const TreeEntry *a, const TreeEntry *b) {
-				return VDStringSpanW(a->mpText).comparei(b->mpText) < 0;
-			}
-		);
-
-		for(const auto *device : devs)
-			mTreeView.AddVirtualItem(catNode, mTreeView.kNodeLast, vdmakerefptr(new TreeNode(*device)));
-
-		mTreeView.ExpandNode(catNode, true);
-	}
-
-	mTreeView.SetRedraw(true);
 	SetFocusToControl(IDC_TREE);
 
 	VDDialogFrameW32::OnLoaded();
@@ -715,6 +711,9 @@ bool ATUIDialogDeviceNew::OnOK() {
 	if (VDResizableDialogFrameW32::OnOK())
 		return true;
 
+	if (!mpDeviceTag)
+		return true;
+
 	if (!strncmp(mpDeviceTag, "diskdrive", 9)) {
 		if (!ATUIConfirmAddFullDrive())
 			return true;
@@ -725,6 +724,8 @@ bool ATUIDialogDeviceNew::OnOK() {
 
 void ATUIDialogDeviceNew::OnDataExchange(bool write) {
 	if (write) {
+		mpDeviceTag = nullptr;
+
 		TreeNode *node = static_cast<TreeNode *>(mTreeView.GetSelectedVirtualItem());
 
 		if (!node) {
@@ -732,7 +733,18 @@ void ATUIDialogDeviceNew::OnDataExchange(bool write) {
 			return;
 		}
 
+		if (!node->mbPassesFilter) {
+			ShowError2(
+				L"No compatible port is available for the selected device. Select a compatible port "
+				L"or add an adapter to support this device.",
+				L"No port for device"
+			);
+			return;
+		}
+
 		mpDeviceTag = node->mNode.mpTag;
+	} else {
+		mShowUnavailableView.SetChecked(sShowUnavailable);
 	}
 }
 
@@ -792,6 +804,49 @@ void ATUIDialogDeviceNew::AppendRTF(VDStringA& rtf, const wchar_t *text) {
 		else
 			rtf += (char)c;
 	}
+}
+
+void ATUIDialogDeviceNew::RefreshDeviceTree() {
+	mTreeView.SetRedraw(false);
+	mTreeView.Clear();
+
+	for(const auto& category : kCategories) {
+		const bool passesFilter = !mFilter || mFilter(category.mpTag);
+
+		if (!sShowUnavailable && !passesFilter)
+			continue;
+
+		const wchar_t *categoryText = category.mpText;
+		VDStringW modifiedCategoryText;
+
+		if (!passesFilter) {
+			modifiedCategoryText = categoryText;
+			modifiedCategoryText.append(L" - (no port available on parent device)");
+
+			categoryText = modifiedCategoryText.c_str();
+		}
+
+		VDUIProxyTreeViewControl::NodeRef catNode = mTreeView.AddItem(mTreeView.kNodeRoot, mTreeView.kNodeLast, categoryText);
+
+		vdfastvector<const TreeEntry *> devs;
+
+		for(const auto& device : category.mDevices)
+			devs.push_back(&device);
+
+		std::ranges::sort(
+			devs,
+			[](const TreeEntry *a, const TreeEntry *b) {
+				return VDStringSpanW(a->mpText).comparei(b->mpText) < 0;
+			}
+		);
+
+		for(const auto *device : devs)
+			mTreeView.AddVirtualItem(catNode, mTreeView.kNodeLast, vdmakerefptr(new TreeNode(*device, passesFilter)));
+
+		mTreeView.ExpandNode(catNode, true);
+	}
+
+	mTreeView.SetRedraw(true);
 }
 
 ///////////////////////////////////////////////////////////////////////////

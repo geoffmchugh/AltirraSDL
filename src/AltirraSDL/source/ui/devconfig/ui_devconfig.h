@@ -111,6 +111,7 @@ bool RenderHappy810Config(ATPropertySet& props, ATDeviceConfigState& st);
 bool Render815Config(ATPropertySet& props, ATDeviceConfigState& st);
 bool RenderATR8000Config(ATPropertySet& props, ATDeviceConfigState& st);
 bool Render1020Config(ATPropertySet& props, ATDeviceConfigState& st);
+bool RenderPrinterFX80Config(ATPropertySet& props, ATDeviceConfigState& st);
 bool RenderMultiplexerConfig(ATPropertySet& props, ATDeviceConfigState& st);
 bool RenderParFileWriterConfig(ATPropertySet& props, ATDeviceConfigState& st);
 bool RenderKarinMaxiDriveConfig(ATPropertySet& props, ATDeviceConfigState& st);

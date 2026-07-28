@@ -118,6 +118,8 @@
     <ClInclude Include="h\printerbase.h" />
     <ClInclude Include="h\printerexport.h" />
     <ClInclude Include="h\printerfont.h" />
+    <ClInclude Include="h\printerfontfx80.h" />
+    <ClInclude Include="h\printerfx80.h" />
     <ClInclude Include="h\printeroutput.h" />
     <ClInclude Include="h\printerrasterizer.h" />
     <ClInclude Include="h\printerttfencoder.h" />
@@ -327,6 +329,8 @@
     <ClCompile Include="source\printerbase.cpp" />
     <ClCompile Include="source\printerexport.cpp" />
     <ClCompile Include="source\printerfont.cpp" />
+    <ClCompile Include="source\printerfontfx80.cpp" />
+    <ClCompile Include="source\printerfx80.cpp" />
     <ClCompile Include="source\printeroutput.cpp" />
     <ClCompile Include="source\printerrasterizer.cpp" />
     <ClCompile Include="source\printerttfencoder.cpp" />
@@ -408,6 +412,7 @@
     <ClCompile Include="source\uiconfdevpipeserial.cpp" />
     <ClCompile Include="source\uiconfdevpocketmodem.cpp" />
     <ClCompile Include="source\uiconfdevprinter.cpp" />
+    <ClCompile Include="source\uiconfdevprinterfx80.cpp" />
     <ClCompile Include="source\uiconfdevside3.cpp" />
     <ClCompile Include="source\uiconfdevsx212.cpp" />
     <ClCompile Include="source\uiconfdevvbxe.cpp" />
