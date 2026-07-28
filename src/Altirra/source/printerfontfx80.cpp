@@ -416,7 +416,11 @@ consteval ATPrinterFontFX80::ATPrinterFontFX80() {
 	//
 	// Unfortunately, neither manual documents offsets, just the width.
 	//
-	static constexpr uint8 kDocumentedWidths[] {
+	// MERGE NOTE: Keep this local table non-static. GCC 12 lacks C++23
+	// P2647 support for static constexpr variables in consteval functions.
+	// The consteval constructor still guarantees compile-time evaluation.
+	// See docs/merging-with-altirra-mainline.md, Issue 1.
+	constexpr uint8 kDocumentedWidths[] {
 		/* 00 */ 12, 12, 11, 10,  8,  8, 12,  5, 12, 12, 11, 12, 12, 12, 12, 11,
 		/* 10 */ 10, 11, 12, 12, 12, 12,  8, 12, 12, 12, 12, 10, 11, 12, 12, 12,
 		/* 20 */ 12,  5,  8, 12, 12, 12, 12,  5,  6,  6, 12, 12,  7, 12,  6, 10,

@@ -20,7 +20,7 @@ moment CI turns red.
 
 ---
 
-## Issue 1 — `static constexpr` inside a constexpr function/lambda
+## Issue 1 — `static constexpr` inside a constexpr/consteval function
 
 ### Symptom (CI log)
 
@@ -29,13 +29,19 @@ error: constexpr variable 'kFoo' must be initialized by a constant expression
 note:  control flows through the definition of a static variable
 ```
 
-The note will point at an inner `static constexpr` declaration inside a
-lambda whose result initialises a `constexpr` variable.
+The diagnostic points at an inner `static constexpr` declaration inside a
+`constexpr` or `consteval` function, constructor, or lambda. A failed
+immediate invocation may then produce a second, cascading error:
+
+```
+error: 'consteval Foo::Foo()' called in a constant expression
+```
 
 ### Why CI rejects it
 
 Mainline Altirra commonly writes immediately-invoked constexpr lambdas
-that wrap a sorted/cooked table:
+that wrap a sorted/cooked table, and consteval constructors that validate
+tables:
 
 ```cpp
 static constexpr auto kThing = [] {
@@ -65,21 +71,29 @@ static constexpr auto kThing = [] {
 }();
 ```
 
-Non-static `constexpr` locals are legal under C++17. The outer lambda
-is still evaluated once at compile time and the result is copied into
-the surrounding constexpr variable, so the inner array never exists at
-runtime. Zero runtime cost.
+Non-static `constexpr` locals are legal under C++17. The enclosing
+constant evaluation still happens at compile time, so the inner array
+never exists at runtime. Zero runtime cost. Do not move validation to
+runtime or remove `constexpr`/`consteval` merely to silence the compiler.
 
 ### Where to look during a merge
 
-Audit recipe:
+Mandatory audit recipe:
 
 ```sh
+# Review every static constexpr declaration added by the upstream merge.
+git diff <pre-merge-commit>..HEAD -- '*.cpp' '*.h' \
+  | grep '^+.*static constexpr'
+
+# Also find constexpr lambdas for context; inspect their bodies for locals.
 grep -rn "constexpr auto.*= \[\]" src/
 ```
 
-For each match, open the file and check the lambda body. Any `static`
-qualifier on a local variable inside the body must be removed.
+For each added declaration, determine whether the enclosing scope is a
+`constexpr` or `consteval` function, constructor, or lambda. Any `static`
+qualifier on such a local variable must be removed. Add a `MERGE NOTE`
+referencing this issue at every corrected upstream site so a later merge
+does not silently restore it.
 
 ### Canonical fix in code
 
@@ -89,6 +103,12 @@ Contains an in-source `MERGE NOTE` banner above
 pitfall. Five lambdas in that file (`kATDefaultSymbolsForOSVariables`,
 `kGTIASymbols`, `kPOKEYSymbols`, `kPIASymbols`, `kANTICSymbols`) follow
 the corrected pattern.
+
+`src/Altirra/source/printerfontfx80.cpp` — the test16 merge added a
+`static constexpr` width table inside a `consteval` constructor. GCC 12
+rejected every Linux product that compiled this shared source. The table
+must remain local `constexpr` (without `static`) so its compile-time
+cross-check is preserved on the CI compiler floor.
 
 ---
 

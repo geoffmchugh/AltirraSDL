@@ -409,3 +409,11 @@ ubuntu:22.04).  Each of these failures is trivial to fix once you
 know the pattern.  See `docs/merging-with-altirra-mainline.md` for
 the catalogue, symptoms, fixes, and an audit recipe to run before
 pushing a merge.
+
+**Mandatory constexpr audit:** After every upstream merge, inspect every
+added `static constexpr` declaration. If it is local to a `constexpr` or
+`consteval` function, constructor, or lambda, remove `static` while keeping
+`constexpr`, unless the CI compiler floor is first raised to a toolchain
+with C++23 P2647 support. A non-static local remains compile-time-only when
+the enclosing evaluation is constant. Leave a `MERGE NOTE` at corrected
+upstream sites so a later sync does not restore the incompatible form.
