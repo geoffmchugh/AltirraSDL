@@ -413,7 +413,7 @@ static const VDStringW VDGetFileName(bool bSaveAs, long nKey, VDGUIHandle ctxPar
 	ofn.w.nFilterIndex		= 0;
 	ofn.w.lpstrFileTitle	= NULL;
 	ofn.w.lpstrInitialDir	= NULL;
-	ofn.w.Flags				= OFN_PATHMUSTEXIST|OFN_ENABLESIZING|OFN_EXPLORER|OFN_OVERWRITEPROMPT|OFN_HIDEREADONLY;
+	ofn.w.Flags				= OFN_PATHMUSTEXIST|OFN_ENABLESIZING|OFN_EXPLORER|OFN_HIDEREADONLY;
 
 	if (bSaveAs)
 		ofn.w.Flags |= OFN_OVERWRITEPROMPT;

@@ -416,7 +416,7 @@ bool VDTSurfaceD3D11::Init(VDTContextD3D11 *parent, uint32 width, uint32 height,
 
 	parent->AddResource(this);
 
-	return SUCCEEDED(hr);
+	return true;
 }
 
 bool VDTSurfaceD3D11::Init(VDTContextD3D11 *parent, IVDTTexture *parentTexture, ID3D11Texture2D *tex, ID3D11Texture2D *texsys, uint32 mipLevel, VDTUsage usage, bool onlyMip, bool forceSRGB) {
@@ -3074,7 +3074,6 @@ bool VDTContextD3D11::IsMonitorHighColorEnabled(void *monitor, bool& systemSuppo
 				default:
 					return false;
 			}
-			break;
 		}
 	}
 
@@ -3201,8 +3200,14 @@ bool VDTContextD3D11::CreateComputeProgram(VDTProgramFormat format, VDTData data
 			0
 		};
 
-		if (!VDTExtractMultiTargetProgram(data, mpData->mbMinPrecisionSupportedPS ? kCSTargets : kCSTargets + 1, data))
+		if (!VDTExtractMultiTargetProgram(data,
+			mpData->mbMinPrecisionSupportedOther
+				? kCSTargets
+				: kCSTargets + 1,
+			data))
+		{
 			return false;
+		}
 	} else if (format != kVDTPF_D3D11ByteCode)
 		return false;
 
@@ -3332,7 +3337,7 @@ void VDTContextD3D11::SetFragmentProgram(IVDTFragmentProgram *program) {
 void VDTContextD3D11::SetVertexStream(uint32 index, IVDTVertexBuffer *buffer, uint32 offset, uint32 stride) {
 	VDASSERT(index == 0);
 
-	if (buffer == mpCurrentVB && offset == mCurrentVBOffset && offset == mCurrentVBStride)
+	if (buffer == mpCurrentVB && offset == mCurrentVBOffset && stride == mCurrentVBStride)
 		return;
 
 	mpCurrentVB = static_cast<VDTVertexBufferD3D11 *>(buffer);
@@ -3798,6 +3803,20 @@ void VDTContextD3D11::Present() {
 		SetRenderTarget(0, nullptr, false);
 }
 
+void VDTContextD3D11::SetGpuPriority(int priority) {
+	vdrefptr<IDXGIDevice> dxgiDevice;
+	if (SUCCEEDED(mpD3DDevice->QueryInterface(
+		IID_IDXGIDevice, (void **)~dxgiDevice)))
+	{
+		if (priority < -7)
+			priority = -7;
+		else if (priority > 7)
+			priority = 7;
+
+		dxgiDevice->SetGPUThreadPriority(priority);
+	}
+}
+
 void VDTContextD3D11::BeginScope(uint32 color, const char *message) {
 	if (mpD3DAnnotation) {
 		WCHAR buf[512];
@@ -3904,15 +3923,15 @@ void VDTContextD3D11::UnsetSamplerState(IVDTSamplerState *state) {
 void VDTContextD3D11::UnsetTexture(IVDTTexture *tex) {
 	for(int i=0; i<16; ++i) {
 		if (mpCurrentPsTextures[i] == tex) {
-			IVDTTexture *tex = NULL;
-			SetTextures(i, 1, &tex);
+			IVDTTexture *nullTex = nullptr;
+			SetTextures(i, 1, &nullTex);
 		}
 	}
 
 	for(int i=0; i<16; ++i) {
 		if (mpCurrentCsTextures[i] == tex) {
-			IVDTTexture *tex = NULL;
-			CsSetTextures(i, 1, &tex);
+			IVDTTexture *nullTex = nullptr;
+			CsSetTextures(i, 1, &nullTex);
 		}
 	}
 	

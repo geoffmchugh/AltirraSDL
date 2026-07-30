@@ -41,6 +41,8 @@
 #include <at/ataudio/audiooutput.h>
 
 #include "mobile_internal.h"
+#include "ui/dialogs/ui_game_metadata.h"
+#include "media/metadata_scraper.h"
 #include "altirra_icons.h"
 #include "ui_fonts.h"
 #include "../gamelibrary/game_library.h"
@@ -136,7 +138,13 @@ void RenderSettings(ATSimulator &sim, ATUIState &uiState,
 	if (ImGui::Begin("##MobileSettings", nullptr, flags)) {
 		// ESC / B-button / Backspace navigates back, same as "<" arrow.
 		// Skip when a modal dialog is on top (see mobile_hamburger.cpp).
-		if (!s_confirmActive && !s_infoModalOpen) {
+		// The Metadata page's option pickers own Back while they are up.
+		// Scoped to that page as well as the flag, so a stale flag can
+		// never disable Back on an unrelated settings page.
+		if (!s_confirmActive && !s_infoModalOpen
+			&& !(s_settingsPage == ATMobileSettingsPage::Metadata
+				&& ATMobileMetadataPickerOpen()))
+		{
 			bool back = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
 			if (!ImGui::IsAnyItemActive()) {
 				back = back
@@ -200,6 +208,7 @@ void RenderSettings(ATSimulator &sim, ATUIState &uiState,
 		case ATMobileSettingsPage::SaveState:   pageTitle = "Save State"; break;
 		case ATMobileSettingsPage::Firmware:    pageTitle = "Firmware"; break;
 		case ATMobileSettingsPage::GameLibrary: pageTitle = "Game Library"; break;
+		case ATMobileSettingsPage::Metadata:    pageTitle = "Metadata"; break;
 		case ATMobileSettingsPage::OnlinePlay:  pageTitle = "Online Play"; break;
 		case ATMobileSettingsPage::Advanced:    pageTitle = "Advanced"; break;
 		}
@@ -1193,12 +1202,44 @@ void RenderSettings(ATSimulator &sim, ATUIState &uiState,
 			RenderSettingsPage_Firmware(mobileState);
 		}
 
+		// --- Sub-page: Metadata (mobile_settings_metadata.cpp) ---
+		if (s_settingsPage == ATMobileSettingsPage::Metadata) {
+			RenderSettingsPage_Metadata(mobileState);
+		}
+
 		// --- Sub-page: Game Library ---
 		if (s_settingsPage == ATMobileSettingsPage::GameLibrary) {
 			ATGameLibrary *lib = GetGameLibrary();
 			if (!lib) {
 				GameBrowser_Init();
 				lib = GetGameLibrary();
+			}
+
+			// Metadata sits at the top of the Game Library page: it is
+			// the thing a user with a freshly-scanned library wants
+			// next, and burying it under the folder list would hide it.
+			ATTouchSection("Metadata");
+			{
+				char sub[96];
+				const int missing = lib
+					? ATMetadataCountEntries(*lib, true) : 0;
+				if (ATMetadataGetScraper().IsRunning()) {
+					std::snprintf(sub, sizeof sub, "Downloading %d / %d...",
+						ATMetadataGetScraper().GetDone(),
+						ATMetadataGetScraper().GetTotal());
+				} else if (missing > 0) {
+					std::snprintf(sub, sizeof sub,
+						"%d game%s without covers or descriptions",
+						missing, missing == 1 ? "" : "s");
+				} else {
+					std::snprintf(sub, sizeof sub,
+						"Covers, descriptions and screenshots");
+				}
+				if (ATTouchListItem("Game metadata", sub, false, true,
+					ICON_MD_CLOUD_DOWNLOAD))
+				{
+					s_settingsPage = ATMobileSettingsPage::Metadata;
+				}
 			}
 
 			ATTouchSection("Game Folders");

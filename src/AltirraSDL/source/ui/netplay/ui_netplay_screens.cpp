@@ -2574,8 +2574,10 @@ bool RenderLibPickMobileGrid(ATGameLibrary& lib,
 
 		int artW = 0, artH = 0;
 		ImTextureID artTex = (ImTextureID)0;
-		if (cache && !e.mArtPath.empty())
-			artTex = cache->GetTexture(e.mArtPath, &artW, &artH);
+		// Through the library so downloaded metadata art shows here too.
+		const VDStringW artPath = lib.GetTileArtPath(e);
+		if (cache && !artPath.empty())
+			artTex = cache->GetTexture(artPath, &artW, &artH);
 
 		if (artTex && artW > 0 && artH > 0) {
 			float srcA = (float)artW / (float)artH;

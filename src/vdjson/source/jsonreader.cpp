@@ -155,8 +155,16 @@ bool VDJSONReader::ParseObject(VDJSONValue& obj) {
 
 	VDJSONMember *tail = nullptr;
 
+	// AltirraSDL: was `if (c != L'{')`, which can never be true — the
+	// caller has already consumed the opening brace, so the next
+	// character is either '}' (empty object) or '"' (first member name).
+	// The effect was that `{}` — and any document containing one, at any
+	// depth — failed to parse at all, while `[]` parsed fine because
+	// ParseArray below tests the correct closing character.  Compare it
+	// against '}' as ParseArray does against ']'.
+	// PRESERVE ON UPSTREAM RESYNC.
 	wchar_t c = GetNonWhitespaceChar();
-	if (c != L'{') {
+	if (c != L'}') {
 		UngetChar();
 
 		typedef vdhashmap<uint32, VDJSONValue *> Lookup;
@@ -660,7 +668,17 @@ wchar_t VDJSONReader::GetCharSlow() {
 				if ((c >= 0x80 && c < 0xC2) || c >= 0xF5) {		// invalid: follower without leader or too high of a code point
 					encodingError = true;
 					break;
-				} else if (c >= 0xC2 && c < 0xDF) {		// U+0080 to U+07FF
+				// AltirraSDL: two fixes to the two-byte sequence decode,
+				// preserve on upstream resync.
+				//   1. the range test excluded 0xDF, so U+07C0..U+07FF
+				//      fell through to the "no branch" case and emitted
+				//      the lead byte raw;
+				//   2. the continuation byte was added without removing
+				//      its 0x80 tag, so every U+0080..U+07FF character
+				//      decoded 0x80 too high (U+00E7 became U+0167).
+				// Together these made every accented character in a
+				// UTF-8 document decode wrongly or fail outright.
+				} else if (c >= 0xC2 && c <= 0xDF) {		// U+0080 to U+07FF
 					if (mpSrc == mpSrcEnd) {
 						encodingError = true;
 						break;
@@ -672,7 +690,7 @@ wchar_t VDJSONReader::GetCharSlow() {
 						break;
 					}
 
-					d = ((c - 0xC0) << 6) + x0;
+					d = ((c - 0xC0) << 6) + (x0 - 0x80);
 				} else if (c >= 0xE0 && c <= 0xEF) {	// U+0800 to U+FFFF
 					if (mpSrcEnd - mpSrc < 2) {
 						encodingError = true;
@@ -689,7 +707,17 @@ wchar_t VDJSONReader::GetCharSlow() {
 					d = ((c - 0xE0) << 12) + (((wchar_t)x0 - 0x80) << 6) + (wchar_t)(x1 - 0x80);
 
 					// reject invalid code points
-					if (d < 0x0800 || (d - 0xD800) < 0x0800) {
+					//
+					// AltirraSDL: the surrogate test must be done in
+					// unsigned arithmetic; preserve on upstream resync.
+					// wchar_t is a SIGNED 32-bit type on Linux and
+					// macOS, so `(d - 0xD800) < 0x0800` was a signed
+					// comparison that came out true for every code
+					// point below U+D800 — rejecting the whole
+					// U+0800..U+D7FF range, i.e. all three-byte UTF-8.
+					// On Windows wchar_t is unsigned 16-bit and the
+					// intended wraparound happens to work.
+					if ((uint32)d < 0x0800 || ((uint32)d - 0xD800) < 0x0800) {
 						encodingError = true;
 						break;
 					}

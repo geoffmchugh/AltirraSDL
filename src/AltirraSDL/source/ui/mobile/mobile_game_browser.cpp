@@ -34,8 +34,13 @@
 #include <vd2/Kasumi/pixmapops.h>
 #include <vd2/Kasumi/pixmaputils.h>
 
+#include "app/android_platform.h"   // ATAndroid_Vibrate (no-op off Android)
+
 #include "../gamelibrary/game_library.h"
 #include "../gamelibrary/game_library_art.h"
+#include "../dialogs/ui_game_metadata.h"
+#include "media/metadata_scraper.h"
+#include "media/metadata_settings.h"
 
 #ifdef ALTIRRA_NETPLAY_ENABLED
 #include "../netplay/ui_netplay.h"
@@ -201,6 +206,13 @@ void GameBrowser_Init() {
 }
 
 void GameBrowser_Shutdown() {
+	// Order matters: the scraper's workers hold no library pointers
+	// (Start() snapshots everything they need), but ConsumeResults
+	// writes into mEntries, so both background users must be fully
+	// joined before the library object goes away.
+	ATMetadataGetScraper().Shutdown();
+	ATUIMetadataShutdownAccountTest();
+
 	if (s_artCache) {
 		s_artCache->Shutdown();
 		delete s_artCache;
@@ -257,7 +269,7 @@ bool GameBrowser_CurrentEntryNeedsArt() {
 	const auto &entries = s_gameLibrary->GetEntries();
 	if ((size_t)eidx >= entries.size())
 		return false;
-	return entries[eidx].mArtPath.empty();
+	return s_gameLibrary->GetTileArtPath(entries[eidx]).empty();
 }
 
 VDStringA GameBrowser_SetCurrentFrameAsArt() {
@@ -796,6 +808,168 @@ static void ShowVariantPicker(size_t entryIndex) {
 	s_variantPickerSwapCb = nullptr;  // boot mode
 }
 
+// Public wrappers used by the Game Details sheet
+// (mobile_game_details.cpp).  It deliberately does not duplicate the
+// launch and picker logic — picker-mode hand-off, play-count
+// recording and the resume-after-boot sequencing all live in
+// LaunchGame and must stay in exactly one place.
+void GameBrowser_LaunchEntry(ATSimulator &sim, ATMobileUIState &mobileState,
+	size_t entryIndex, int variantIndex)
+{
+	LaunchGame(sim, mobileState, entryIndex, variantIndex);
+}
+
+void GameBrowser_ShowVariantPickerForBoot(int entryIdx) {
+	if (entryIdx < 0)
+		return;
+	ShowVariantPicker((size_t)entryIdx);
+}
+
+// ── Highlight (preview) selection ─────────────────────────────────
+//
+// The docked preview panel needs a persistent notion of "the game the
+// user is looking at".  Three of the four input devices already supply
+// one for free:
+//
+//     gamepad / keyboard   ImGui nav focus
+//     mouse                hover
+//     touch                nothing — so long-press supplies it
+//
+// so this is a latch fed by whichever of those fired most recently.  It
+// is deliberately never cleared when focus or hover goes away: a panel
+// that blanked the instant the pointer left the grid would be useless,
+// and it would flicker on every mouse move between tiles.
+static int s_previewEntry = -1;
+
+// Recomputed from the window geometry every frame in RenderGameBrowser.
+// The gesture handler reads it to decide whether a long-press should
+// move the panel or open the full-screen sheet, so it must be up to
+// date before any tile is drawn.
+static ATGamePreviewDock s_previewDock = ATGamePreviewDock::None;
+
+// Call immediately after a tile/row's Selectable.
+static void UpdatePreviewFromItem(size_t entryIndex) {
+	if (s_previewDock == ATGamePreviewDock::None)
+		return;
+
+	if (ImGui::IsItemFocused()) {
+		s_previewEntry = (int)entryIndex;
+		return;
+	}
+
+	// Hover only counts when the pointer actually moved this frame.
+	// Without that test, a mouse parked over one tile would fight the
+	// D-pad for the panel on every single frame.  The drag test stops a
+	// touch-scroll from riffling the panel through every game the finger
+	// slides across.
+	const ImGuiIO &io = ImGui::GetIO();
+	if (ImGui::IsItemHovered()
+		&& (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)
+		&& !ATTouchIsDraggingBeyondSlop())
+	{
+		s_previewEntry = (int)entryIndex;
+	}
+}
+
+// Long-press / Gamepad-Y / F2 / right-click ask for more about a game.
+// A plain tap still boots, so the fast path nobody wants to lose is
+// untouched.
+//
+// Press-and-hold is measured per tile rather than globally: two tiles
+// can never be held at once, but a hold that slides off its tile must
+// not fire on whatever ends up under the finger.
+static ImGuiID s_holdItemId = 0;
+static float   s_holdTime = 0.0f;
+static const float kLongPressSeconds = 0.5f;
+
+enum class DetailsGesture {
+	None,
+	// Long-press while a preview panel is docked.  The panel is already
+	// the answer to "tell me more", so moving it is both cheaper and
+	// less disorienting than a full screen change.
+	Highlight,
+	// No panel to move (phone-sized screen), or an explicit request —
+	// open the full-screen details sheet.
+	OpenSheet,
+};
+
+static void OpenGameDetails(ATMobileUIState &mobileState, size_t entryIndex) {
+	GameDetails_Open((int)entryIndex);
+	mobileState.currentScreen = ATMobileUIScreen::GameDetails;
+}
+
+// Call immediately after the tile/row Selectable.
+static DetailsGesture ConsumeDetailsGesture() {
+	const ImGuiID id = ImGui::GetItemID();
+
+	// Gamepad Y / keyboard F2 on the focused tile.  This is also how a
+	// gamepad user reaches the panel's actions, since the panel itself
+	// is NoNav by design — so it always opens the sheet, never merely
+	// re-highlights what is already highlighted.
+	if (ImGui::IsItemFocused()
+		&& (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)
+			|| ImGui::IsKeyPressed(ImGuiKey_F2, false)))
+	{
+		return DetailsGesture::OpenSheet;
+	}
+
+	// Right-click is the mouse equivalent — the same affordance desktop
+	// users expect from the Game Library table.
+	if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+		return DetailsGesture::OpenSheet;
+
+	DetailsGesture result = DetailsGesture::None;
+
+	if (ImGui::IsItemActive() && !ATTouchIsDraggingBeyondSlop()) {
+		if (s_holdItemId != id) {
+			s_holdItemId = id;
+			s_holdTime = 0.0f;
+		}
+		s_holdTime += ImGui::GetIO().DeltaTime;
+		if (s_holdTime >= kLongPressSeconds) {
+			// Clear the active item so the release does not also
+			// register as a tap and boot the game we just opened.
+			ImGui::ClearActiveID();
+			s_holdItemId = 0;
+			s_holdTime = 0.0f;
+			result = (s_previewDock == ATGamePreviewDock::None)
+				? DetailsGesture::OpenSheet
+				: DetailsGesture::Highlight;
+
+			// A highlight makes no screen transition, so without a pulse
+			// the user has no confirmation that the hold registered.
+			if (result == DetailsGesture::Highlight
+				&& g_mobileState.layoutConfig.hapticEnabled)
+			{
+				ATAndroid_Vibrate(15);
+			}
+		}
+	} else if (s_holdItemId == id) {
+		s_holdItemId = 0;
+		s_holdTime = 0.0f;
+	}
+
+	return result;
+}
+
+// Apply a gesture result to one entry.  Shared by the tile and row
+// renderers so the two can never diverge.
+static void ApplyDetailsGesture(ATMobileUIState &mobileState,
+	DetailsGesture gesture, size_t entryIndex)
+{
+	switch (gesture) {
+		case DetailsGesture::Highlight:
+			s_previewEntry = (int)entryIndex;
+			break;
+		case DetailsGesture::OpenSheet:
+			s_previewEntry = (int)entryIndex;
+			OpenGameDetails(mobileState, entryIndex);
+			break;
+		default:
+			break;
+	}
+}
+
 int GameBrowser_FindEntryForPath(const wchar_t *path) {
 	if (!s_gameLibrary || !path || !*path)
 		return -1;
@@ -1085,9 +1259,14 @@ static void RenderGameTile(ATSimulator &sim, ATMobileUIState &mobileState,
 				ShowVariantPicker(entryIndex);
 		}
 	}
+	const DetailsGesture gesture = ConsumeDetailsGesture();
+	UpdatePreviewFromItem(entryIndex);
 	ImGui::PopStyleColor(3);
+	ApplyDetailsGesture(mobileState, gesture, entryIndex);
 
 	bool hovered = ImGui::IsItemHovered() || ImGui::IsItemFocused();
+	const bool highlighted = (s_previewDock != ATGamePreviewDock::None)
+		&& (s_previewEntry == (int)entryIndex);
 
 	const ATMobilePalette &pal = ATMobileGetPalette();
 	ImVec2 imgTL = cursor;
@@ -1096,8 +1275,11 @@ static void RenderGameTile(ATSimulator &sim, ATMobileUIState &mobileState,
 	// Try to show game art; fall back to color placeholder
 	int artW = 0, artH = 0;
 	ImTextureID artTex = (ImTextureID)0;
-	if (s_artCache && !entry.mArtPath.empty())
-		artTex = s_artCache->GetTexture(entry.mArtPath, &artW, &artH);
+	// GetTileArtPath applies the art precedence: user-set custom art
+	// beats downloaded metadata media, which beats scanner-matched art.
+	const VDStringW artPath = s_gameLibrary->GetTileArtPath(entry);
+	if (s_artCache && !artPath.empty())
+		artTex = s_artCache->GetTexture(artPath, &artW, &artH);
 
 	if (artTex && artW > 0 && artH > 0) {
 		// Fit image inside tile area, centered, with aspect ratio preserved
@@ -1150,10 +1332,52 @@ static void RenderGameTile(ATSimulator &sim, ATMobileUIState &mobileState,
 			IM_COL32(255, 255, 255, 220), countStr);
 	}
 
-	// Hover/focus border
-	if (hovered) {
-		dl->AddRect(imgTL, imgBR,
-			pal.rowFocus, dp(4.0f), 0, dp(2.0f));
+	// Metadata badge (bottom-right).  Drawn only when the entry has
+	// real metadata, so it doubles as the "there is more to see here"
+	// affordance that makes the long-press discoverable.
+	if (entry.mMeta.mStatus == GameMetaStatus::Matched
+		|| entry.mMeta.mStatus == GameMetaStatus::UserEdited)
+	{
+		const char *glyph = "i";
+		const ImVec2 gs = ImGui::CalcTextSize(glyph);
+		const float badgePad = dp(4.0f);
+		dl->AddRectFilled(
+			ImVec2(imgBR.x - gs.x - badgePad * 2,
+				imgBR.y - gs.y - badgePad * 2),
+			ImVec2(imgBR.x, imgBR.y),
+			IM_COL32(0, 0, 0, 180), dp(4.0f));
+		dl->AddText(
+			ImVec2(imgBR.x - gs.x - badgePad, imgBR.y - gs.y - badgePad),
+			IM_COL32(255, 255, 255, 220), glyph);
+	}
+
+	// Selection / hover ring.
+	//
+	// One ring, not two.  With a gamepad, focus and highlight are always
+	// the same tile, so drawing both would double-stroke every focused
+	// item; the highlight ring simply takes precedence.  It wraps the
+	// whole tile, label included, because "this card is selected" is
+	// what it has to communicate, and a card ringed round only its top
+	// half looks unfinished.
+	if (highlighted) {
+		const ImVec2 tileTL(cursor.x, cursor.y);
+		const ImVec2 tileBR(cursor.x + tileW, cursor.y + totalH);
+
+		// The accent wash goes on the label strip only.  This draw list
+		// is immediate-mode and the artwork is already down, so a fill
+		// spanning the whole tile would tint the cover instead of
+		// sitting behind it — the label area is the one part that is
+		// still empty background at this point.  The name is drawn
+		// after, so it lands on top of the wash.
+		dl->AddRectFilled(ImVec2(tileTL.x, cursor.y + imageH), tileBR,
+			pal.accentSoft, dp(4.0f));
+
+		// Ring thickness is centred on the edge, so a 2dp stroke bleeds
+		// 1dp outside the tile — comfortably inside the 8dp gutter
+		// between tiles, and it cannot collide with the next row's ring.
+		dl->AddRect(tileTL, tileBR, pal.accent, dp(4.0f), 0, dp(2.0f));
+	} else if (hovered) {
+		dl->AddRect(imgTL, imgBR, pal.rowFocus, dp(4.0f), 0, dp(2.0f));
 	}
 
 	// Game name below tile (centered, clipped)
@@ -1206,10 +1430,27 @@ static void RenderGameRow(ATSimulator &sim, ATMobileUIState &mobileState,
 				ShowVariantPicker(entryIndex);
 		}
 	}
+	const DetailsGesture gesture = ConsumeDetailsGesture();
+	UpdatePreviewFromItem(entryIndex);
+	ApplyDetailsGesture(mobileState, gesture, entryIndex);
 
 	// Draw the row content on top of the selectable
 	ImDrawList *dl = ImGui::GetWindowDrawList();
 	const ATMobilePalette &pal = ATMobileGetPalette();
+
+	// Selection band.  Drawn first so everything below lands on top of
+	// it; a list row has no spare margin for a ring, so it gets a filled
+	// band plus an accent edge instead.
+	if (s_previewDock != ATGamePreviewDock::None
+		&& s_previewEntry == (int)entryIndex)
+	{
+		dl->AddRectFilled(cursor,
+			ImVec2(cursor.x + availW, cursor.y + rowH),
+			pal.accentSoft, dp(4.0f));
+		dl->AddRectFilled(cursor,
+			ImVec2(cursor.x + dp(3.0f), cursor.y + rowH),
+			pal.accent, dp(2.0f));
+	}
 
 	float thumbSize = rowH - dp(8.0f);
 	float thumbX = cursor.x + dp(4.0f);
@@ -1218,8 +1459,11 @@ static void RenderGameRow(ATSimulator &sim, ATMobileUIState &mobileState,
 
 	int artW = 0, artH = 0;
 	ImTextureID artTex = (ImTextureID)0;
-	if (s_artCache && !entry.mArtPath.empty())
-		artTex = s_artCache->GetTexture(entry.mArtPath, &artW, &artH);
+	// GetTileArtPath applies the art precedence: user-set custom art
+	// beats downloaded metadata media, which beats scanner-matched art.
+	const VDStringW artPath = s_gameLibrary->GetTileArtPath(entry);
+	if (s_artCache && !artPath.empty())
+		artTex = s_artCache->GetTexture(artPath, &artW, &artH);
 
 	if (artTex && artW > 0 && artH > 0) {
 		// Small square thumbnail
@@ -1306,6 +1550,11 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 	if (s_artCache)
 		s_artCache->ProcessPending();
 
+	// Apply any metadata the scraper's workers finished since the last
+	// frame.  Same main-thread contract as ConsumeScanResults below.
+	if (ATMetadataGetScraper().ConsumeResults(*s_gameLibrary, s_artCache))
+		s_needsRefresh = true;
+
 	// Check for completed background scan
 	if (s_gameLibrary->IsScanComplete()) {
 		s_gameLibrary->ConsumeScanResults();
@@ -1316,9 +1565,30 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 			s_artCache->Clear();
 	}
 
+	const bool rebuiltIndices = s_needsRefresh;
 	if (s_needsRefresh) {
 		ComputeAvailableLetters();
 		RebuildFilteredIndices();
+	}
+
+	// Keep the highlight pointing at something the user can actually
+	// see.  A filter change, a letter jump or a rescan can drop the
+	// highlighted entry out of the visible set, and a preview panel
+	// describing a game that is not on screen is worse than an empty
+	// one.  The full scan only runs on the frames the list changed; every
+	// other frame just needs the bounds check, because entries can shrink
+	// underneath us when a scan lands.
+	if (rebuiltIndices) {
+		bool visible = false;
+		for (size_t idx : s_allGamesIndices) {
+			if ((int)idx == s_previewEntry) { visible = true; break; }
+		}
+		if (!visible) {
+			s_previewEntry = s_allGamesIndices.empty()
+				? -1 : (int)s_allGamesIndices[0];
+		}
+	} else if (s_previewEntry >= (int)s_gameLibrary->GetEntries().size()) {
+		s_previewEntry = -1;
 	}
 
 	ImGuiIO &io = ImGui::GetIO();
@@ -1346,6 +1616,24 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 		| ImGuiWindowFlags_NoBackground;
 
 	if (ImGui::Begin("##GameBrowser", nullptr, flags)) {
+
+		// ── Preview panel placement ──────────────────────────────
+		// Computed from the whole browser rectangle, not from whatever
+		// space is left after the header rows, so it stays stable as
+		// transient rows (scan progress, download banner, first-run
+		// nudge) come and go.  `dockCapable` is "could this screen carry
+		// a panel at all" and drives whether the toggle is even offered;
+		// s_previewDock adds the user's preference on top.
+		//
+		// Picker mode opts out: the panel's Play button boots a game,
+		// which is precisely what a picker must not do.
+		const float browserW = io.DisplaySize.x - insetL - insetR;
+		const float browserH = io.DisplaySize.y - insetT - insetB;
+		const ATGamePreviewDock dockCapable =
+			GamePreview_ComputeDock(browserW, browserH, true);
+		s_previewDock =
+			(s_gameLibrary->GetSettings().mbShowDetailsPanel && !s_pickerMode)
+				? dockCapable : ATGamePreviewDock::None;
 
 		// ── Gamepad / keyboard back navigation ───────────────────
 		// ESC / B / Backspace: context-dependent.
@@ -1498,6 +1786,39 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 						"Scanning %s... %d found",
 						status.c_str(), found);
 			}
+
+			// Metadata download status.  Sits with the scan status
+			// because both answer the same question: "is the library
+			// still changing under me?"  The Cancel button is inline so
+			// a long run is always one tap from stopping.
+			{
+				ATMetadataScraper &scraper = ATMetadataGetScraper();
+				if (scraper.IsRunning()) {
+					ImGui::TextColored(ATMobileCol(palBrowser.textSection),
+						"Downloading metadata  %d / %d   (%d found, %d missing)",
+						scraper.GetDone(), scraper.GetTotal(),
+						scraper.GetMatched(), scraper.GetNotFound());
+					ImGui::SameLine(0, dp(12.0f));
+					if (ATTouchButton("Cancel##meta",
+						ImVec2(0, dp(28.0f)), ATTouchButtonStyle::Subtle))
+					{
+						scraper.Cancel();
+					}
+				} else {
+					const VDStringA banner = scraper.GetBanner();
+					if (!banner.empty()) {
+						ImGui::PushTextWrapPos(0.0f);
+						ImGui::TextColored(ATMobileCol(palBrowser.warning),
+							"%s", banner.c_str());
+						ImGui::PopTextWrapPos();
+						if (ATTouchButton("Dismiss##metabanner",
+							ImVec2(0, dp(28.0f)), ATTouchButtonStyle::Subtle))
+						{
+							scraper.ClearBanner();
+						}
+					}
+				}
+			}
 		}
 
 		// ── Row 2: Launch actions ────────────────────────────────
@@ -1635,6 +1956,37 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 				{
 					s_letterPickerOpen = true;
 				}
+				if (ImGui::IsItemFocused())
+					letterBarHasFocus = true;
+			}
+
+			// Details panel toggle.  Hidden entirely on screens too
+			// small to dock a panel, where it could only ever be a
+			// no-op — those screens reach the same information through
+			// the full-screen sheet instead.
+			if (dockCapable != ATGamePreviewDock::None) {
+				ImGui::SameLine(0, dp(8.0f));
+				const bool panelOn =
+					s_gameLibrary->GetSettings().mbShowDetailsPanel;
+				const float infoW = ImGui::CalcTextSize("Details").x
+					+ dp(28.0f);
+				if (ATTouchButton("Details##infopill",
+					ImVec2(infoW, dp(36.0f)),
+					panelOn ? ATTouchButtonStyle::Accent
+					        : ATTouchButtonStyle::Neutral))
+				{
+					GameLibrarySettings st = s_gameLibrary->GetSettings();
+					st.mbShowDetailsPanel = !panelOn;
+					s_gameLibrary->SetSettings(st);
+					s_gameLibrary->SaveSettingsToRegistry();
+					ATRegistryFlushToDisk();
+					s_previewDock = st.mbShowDetailsPanel
+						? dockCapable : ATGamePreviewDock::None;
+				}
+				// Row 3 sits in the parent window, directly above the
+				// non-flattened game list.  Every widget here that can
+				// be the last focusable thing before the list MUST feed
+				// letterBarHasFocus, or D-pad Down would simply stick.
 				if (ImGui::IsItemFocused())
 					letterBarHasFocus = true;
 			}
@@ -1782,6 +2134,78 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 			return;
 		}
 
+		// ── First-run metadata nudge ─────────────────────────────
+		// Shown once, ever, and only when it would actually help: the
+		// library has games, none of them have metadata, downloading is
+		// possible, and nothing is already running.  Dismissal is
+		// sticky so this never becomes a recurring interruption.
+		{
+			ATMetadataSettings &mds = ATMetadataGetSettings();
+			VDStringA whyNotNudge;
+			const int missingMeta = (!mds.mbFirstRunNudgeShown
+				&& !s_gameLibrary->IsScanning()
+				&& !ATMetadataGetScraper().IsRunning()
+				&& ATUIMetadataIsUsable(whyNotNudge))
+				? ATMetadataCountEntries(*s_gameLibrary, true)
+				: 0;
+
+			// Any missing game is worth offering for, not just a
+			// library where every single one is missing: the common case
+			// after adding a folder is a mostly-scraped library with a
+			// handful of blanks, and that is exactly when the offer is
+			// most useful and least intrusive.  Dismissal is still
+			// sticky, and Settings > Metadata remains the permanent home
+			// of the same two actions.
+			if (missingMeta > 0) {
+				ImGui::Dummy(ImVec2(0, dp(4.0f)));
+				char msg[192];
+				snprintf(msg, sizeof msg,
+					"%d game%s ha%s no cover art yet. "
+					"Download covers and descriptions?",
+					missingMeta, missingMeta == 1 ? "" : "s",
+					missingMeta == 1 ? "s" : "ve");
+				ImGui::PushTextWrapPos(0.0f);
+				ImGui::TextColored(ATMobileCol(palBrowser.textSection),
+					"%s", msg);
+				ImGui::PopTextWrapPos();
+
+				// These sit in the header (parent window), directly
+				// above the game-list child.  The child is NOT
+				// NavFlattened — deliberately, so PgUp/PgDown stay
+				// confined to the list — which means ImGui will not
+				// walk D-pad focus into it on its own.  Every header
+				// widget that can be the last focusable thing before
+				// the list must therefore feed `letterBarHasFocus`,
+				// which is what arms the explicit header->list
+				// transfer below.  Without this, focusing a nudge
+				// button and pressing Down would simply stick.
+				const float nudgeH = dp(40.0f);
+				if (ATTouchButton("Not now##nudge", ImVec2(0, nudgeH),
+					ATTouchButtonStyle::Subtle))
+				{
+					mds.mbFirstRunNudgeShown = true;
+					ATMetadataSaveSettings();
+				}
+				if (ImGui::IsItemFocused())
+					letterBarHasFocus = true;
+
+				ImGui::SameLine(0, dp(8.0f));
+				char dlLabel[64];
+				snprintf(dlLabel, sizeof dlLabel,
+					"Get metadata (%d)##nudge", missingMeta);
+				if (ATTouchButton(dlLabel, ImVec2(0, nudgeH),
+					ATTouchButtonStyle::Accent, ICON_MD_CLOUD_DOWNLOAD))
+				{
+					mds.mbFirstRunNudgeShown = true;
+					ATMetadataSaveSettings();
+					ATUIMetadataStartDownload(*s_gameLibrary, true);
+				}
+				if (ImGui::IsItemFocused())
+					letterBarHasFocus = true;
+				ImGui::Dummy(ImVec2(0, dp(4.0f)));
+			}
+		}
+
 		// ── Scrollable game content ──────────────────────────────
 		// No NavFlattened — keeps PgUp/PgDown confined to the
 		// list.  Header→list: only from the letter bar (last row).
@@ -1795,7 +2219,38 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 			s_focusGameList = true;
 		}
 
-		ImGui::BeginChild("##GameList", ImVec2(0, 0),
+		// Reserve the panel's slice of the body before the list claims
+		// the rest.  If the header rows have eaten so much that a panel
+		// would leave no usable grid, drop it for this frame — done
+		// before the first tile is drawn, so the long-press handler and
+		// the tile highlight agree with what is actually on screen.
+		const ImVec2 bodyAvail = ImGui::GetContentRegionAvail();
+		const float panelGap = dp(10.0f);
+		float panelW = 0.0f;
+		float panelH = 0.0f;
+
+		if (s_previewDock == ATGamePreviewDock::Side) {
+			panelW = GamePreview_SideWidth(browserW);
+			if (bodyAvail.y < dp(200.0f)
+				|| bodyAvail.x - panelW - panelGap < dp(240.0f))
+			{
+				s_previewDock = ATGamePreviewDock::None;
+				panelW = 0.0f;
+			}
+		} else if (s_previewDock == ATGamePreviewDock::Bottom) {
+			panelH = GamePreview_BottomHeight(browserH);
+			const float maxPanelH = bodyAvail.y * 0.45f;
+			if (panelH > maxPanelH)
+				panelH = maxPanelH;
+			if (bodyAvail.y - panelH - panelGap < dp(200.0f)) {
+				s_previewDock = ATGamePreviewDock::None;
+				panelH = 0.0f;
+			}
+		}
+
+		ImGui::BeginChild("##GameList",
+			ImVec2(panelW > 0.0f ? -(panelW + panelGap) : 0.0f,
+			       panelH > 0.0f ? -(panelH + panelGap) : 0.0f),
 			ImGuiChildFlags_None);
 		ATTouchDragScroll();
 
@@ -1982,6 +2437,71 @@ void RenderGameBrowser(ATSimulator &sim, ATUIState &uiState,
 
 		ATTouchEndDragScroll();
 		ImGui::EndChild();
+
+		// EndChild leaves the list as the last item, so its measured
+		// height is exactly what the side panel needs to match.
+		const float listH = ImGui::GetItemRectSize().y;
+
+		// Shoulder buttons cycle the artwork the library shows.
+		//
+		// The panel's own left/right arrows are mouse- and touch-only by
+		// construction: the panel is NoNav so it cannot steal D-pad
+		// focus from the grid.  That would leave a controller with no way
+		// to reach the switch at all, so L1/R1 do it directly.  They are
+		// unbound elsewhere in this screen, and "shoulder buttons flip
+		// the view" is the console idiom.
+		if (s_previewDock != ATGamePreviewDock::None
+			&& !s_variantPickerOpen && !s_letterPickerOpen
+			&& !s_confirmActive && !s_infoModalOpen)
+		{
+			if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false))
+				ATUIMetadataCycleArtSlot(-1);
+			else if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false))
+				ATUIMetadataCycleArtSlot(1);
+		}
+
+		// X (or F5) fetches metadata for the highlighted game.
+		//
+		// A launches and Y opens the details sheet, which left no way to
+		// ask for a retry on a game whose automatic attempt failed
+		// without navigating into the sheet to press a button there.  It
+		// is a retry affordance more than a primary action — with
+		// automatic fetching on, most games never need it.
+		if (!s_variantPickerOpen && !s_letterPickerOpen
+			&& !s_confirmActive && !s_infoModalOpen && !s_searchActive
+			&& s_previewEntry >= 0
+			&& (size_t)s_previewEntry < s_gameLibrary->GetEntries().size())
+		{
+			if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false)
+				|| ImGui::IsKeyPressed(ImGuiKey_F5, false))
+			{
+				VDStringA whyNotFetch;
+				if (ATUIMetadataCanDownloadNow(whyNotFetch)) {
+					ATUIMetadataStartDownloadForEntry(*s_gameLibrary,
+						s_previewEntry);
+				} else if (!whyNotFetch.empty()) {
+					ATTouchPushToast(whyNotFetch.c_str(),
+						ATTouchToastSeverity::Warning);
+				}
+			}
+		}
+
+		if (s_previewDock == ATGamePreviewDock::Side) {
+			ImGui::SameLine(0, panelGap);
+			GamePreview_Render(sim, mobileState, s_previewEntry,
+				s_previewDock, ImVec2(panelW, listH));
+		} else if (s_previewDock == ATGamePreviewDock::Bottom) {
+			// EndChild already advanced the cursor by ItemSpacing.y; top
+			// it up to the full gap.  Moving the cursor rather than
+			// emitting a Dummy matters — a Dummy is an item and would
+			// bring a second ItemSpacing.y with it, pushing the panel
+			// past the bottom of the reserved space.
+			const float extra = panelGap - ImGui::GetStyle().ItemSpacing.y;
+			if (extra > 0.0f)
+				ImGui::SetCursorPosY(ImGui::GetCursorPosY() + extra);
+			GamePreview_Render(sim, mobileState, s_previewEntry,
+				s_previewDock, ImVec2(0, panelH));
+		}
 	}
 	ImGui::End();
 

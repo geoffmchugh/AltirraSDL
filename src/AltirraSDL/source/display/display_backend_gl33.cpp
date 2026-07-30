@@ -199,6 +199,12 @@ void DisplayBackendGL::UploadFrame(const void *pixels, int width, int height, in
 		// GLCreateXRGB8888Texture picks the right pixel format per GL
 		// profile (BGRA/REV on desktop, RGBA/UBYTE+swizzle on GLES).
 		mEmuTexture = GLCreateXRGB8888Texture(width, height, false, nullptr);
+		if (!mEmuTexture) {
+			mTexW = 0;
+			mTexH = 0;
+			return;
+		}
+
 		mTexW = width;
 		mTexH = height;
 

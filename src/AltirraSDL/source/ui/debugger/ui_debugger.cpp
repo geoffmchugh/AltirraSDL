@@ -203,9 +203,6 @@ namespace {
 		}
 
 		void UpdateFilterMode() override {
-			if (g_pDisplay)
-				g_pDisplay->UpdateScaleMode();
-
 			if (IDisplayBackend *backend = ATUIGetDisplayBackend())
 				backend->SetFilterMode(ATUIGetDisplayFilterMode());
 		}

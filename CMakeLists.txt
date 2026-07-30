@@ -883,4 +883,5 @@ option(ALTIRRA_BUILD_TESTS
 if(ALTIRRA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(src/AltirraSDL/source/netplay/tests)
+    add_subdirectory(src/AltirraSDL/source/media/tests)
 endif()

@@ -350,6 +350,7 @@ struct DialogMapping {
 
 static const DialogMapping kDialogMap[] = {
 	{ "SystemConfig",      &ATUIState::showSystemConfig },
+	{ "GameLibrary",       &ATUIState::showGameLibrary },
 	{ "DiskManager",       &ATUIState::showDiskManager },
 	{ "CassetteControl",   &ATUIState::showCassetteControl },
 	{ "About",             &ATUIState::showAboutDialog },
@@ -2080,6 +2081,50 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 		return JsonOk();
 	}
 
+	// Switch to Gaming Mode and jump straight to one of its full-screen
+	// screens.  mobile_hamburger above only reaches the hamburger menu,
+	// which left the Game Browser — the screen with the tile grid, the
+	// letter filter and the docked preview panel — unreachable from a
+	// test.  `gameLoaded` is left false so Back on the browser behaves
+	// as it does on a cold start rather than trying to resume a game
+	// that was never booted.
+	if (verb == "mobile_screen") {
+		std::string name = NextToken(cmd);
+		ATMobileUIScreen screen;
+		if      (name == "browser")  screen = ATMobileUIScreen::GameBrowser;
+		else if (name == "details")  screen = ATMobileUIScreen::GameDetails;
+		else if (name == "settings") screen = ATMobileUIScreen::Settings;
+		else if (name == "files")    screen = ATMobileUIScreen::FileBrowser;
+		else if (name == "menu")     screen = ATMobileUIScreen::HamburgerMenu;
+		else if (name == "none")     screen = ATMobileUIScreen::None;
+		else
+			return JsonError("usage: mobile_screen "
+				"<browser|details|settings|files|menu|none>");
+
+		ATUISetMode(ATUIMode::Gaming);
+		ATUIApplyModeStyle(1.0f);
+		g_mobileState.currentScreen = screen;
+		return JsonOk();
+	}
+
+	// Resize the OS window.  Exists so a test can exercise what a device
+	// rotation does — every layout decision that reads io.DisplaySize
+	// (the Game Browser's preview dock, the touch control layout) has to
+	// survive the screen changing shape underneath it while running, and
+	// that cannot be checked by launching at a fixed size.
+	if (verb == "set_window_size") {
+		std::string wStr = NextToken(cmd);
+		std::string hStr = NextToken(cmd);
+		const int w = atoi(wStr.c_str());
+		const int h = atoi(hStr.c_str());
+		if (w < 160 || h < 160 || w > 8192 || h > 8192)
+			return JsonError("usage: set_window_size <w> <h> (160..8192)");
+		if (!g_pWindow)
+			return JsonError("no window");
+		SDL_SetWindowSize(g_pWindow, w, h);
+		return JsonOk();
+	}
+
 	if (verb == "mobile_exit_confirm") {
 		ATUISetMode(ATUIMode::Gaming);
 		ATUIApplyModeStyle(1.0f);
@@ -2139,6 +2184,27 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 			(item->rect.Min.x + item->rect.Max.x) * 0.5f,
 			(item->rect.Min.y + item->rect.Max.y) * 0.5f
 		);
+		action.posResolved = true;
+		action.clickPhase = 0;
+		g_pendingActions.push_back(action);
+		return JsonOk();
+	}
+
+	// Click at an absolute position.  Needed for widgets the test engine
+	// records without a label — tab items are the notable case, since
+	// ImGui never calls ItemInfo for them, so `click <window> <label>`
+	// can never find a tab.
+	if (verb == "click_at" || verb == "right_click_at") {
+		std::string xStr = NextToken(cmd);
+		std::string yStr = NextToken(cmd);
+		if (xStr.empty() || yStr.empty())
+			return JsonError(std::string("usage: ") + verb + " <x> <y>");
+
+		PendingAction action;
+		action.type = PendingActionType::Click;
+		action.mouseButton = (verb == "right_click_at") ? 1 : 0;
+		action.clickPos = ImVec2((float)atof(xStr.c_str()),
+			(float)atof(yStr.c_str()));
 		action.posResolved = true;
 		action.clickPhase = 0;
 		g_pendingActions.push_back(action);
@@ -2538,6 +2604,8 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 			"\"close_dialog <name>\","
 			"\"system_config_category <index>\","
 			"\"mobile_hamburger\","
+			"\"mobile_screen <browser|details|settings|files|menu|none>\","
+			"\"set_window_size <w> <h>\","
 			"\"mobile_exit_confirm\","
 			"\"send_text <utf8>\","
 			"\"click <window> <label>\","

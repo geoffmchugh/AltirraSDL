@@ -41,8 +41,14 @@ void DisplayBackendSDLRenderer::UploadFrame(const void *pixels, int width, int h
 		}
 	}
 
-	if (mpTexture)
-		SDL_UpdateTexture(mpTexture, nullptr, pixels, pitch);
+	if (mpTexture && !SDL_UpdateTexture(mpTexture, nullptr, pixels, pitch)) {
+		// Force recreation on the next frame. Leaving a failed streaming
+		// texture alive would otherwise keep presenting stale contents.
+		SDL_DestroyTexture(mpTexture);
+		mpTexture = nullptr;
+		mTexW = 0;
+		mTexH = 0;
+	}
 }
 
 void DisplayBackendSDLRenderer::BeginFrame() {

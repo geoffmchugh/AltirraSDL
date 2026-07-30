@@ -22,9 +22,9 @@ struct SDL_AudioSpec { int format; int channels; int freq; };
 #define SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK 0
 static inline SDL_AudioStream* SDL_OpenAudioDeviceStream(int, const SDL_AudioSpec*, void*, void*) { return nullptr; }
 static inline void SDL_DestroyAudioStream(SDL_AudioStream*) {}
-static inline void SDL_ResumeAudioStreamDevice(SDL_AudioStream*) {}
-static inline void SDL_PauseAudioStreamDevice(SDL_AudioStream*) {}
-static inline void SDL_SetAudioStreamFormat(SDL_AudioStream*, const SDL_AudioSpec*, const SDL_AudioSpec*) {}
+static inline bool SDL_ResumeAudioStreamDevice(SDL_AudioStream*) { return true; }
+static inline bool SDL_PauseAudioStreamDevice(SDL_AudioStream*) { return true; }
+static inline bool SDL_SetAudioStreamFormat(SDL_AudioStream*, const SDL_AudioSpec*, const SDL_AudioSpec*) { return true; }
 static inline int SDL_GetAudioStreamQueued(SDL_AudioStream*) { return 0; }
 static inline bool SDL_PutAudioStreamData(SDL_AudioStream*, const void*, int) { return true; }
 static inline SDL_AudioDeviceID SDL_GetAudioStreamDevice(SDL_AudioStream*) { return 0; }
@@ -617,7 +617,16 @@ void ATAudioOutputSDL3::InitNativeAudio() {
 	srcSpec.freq = (int)mSamplingRate;
 	srcSpec.format = SDL_AUDIO_S16;
 	srcSpec.channels = 2;
-	SDL_SetAudioStreamFormat(mpStream, &srcSpec, nullptr);
+	if (!SDL_SetAudioStreamFormat(mpStream, &srcSpec, nullptr)) {
+		// The stream was opened with a 48 kHz source spec, so continue at
+		// that known-good rate instead of producing samples at a rate SDL
+		// did not accept.
+		fprintf(stderr,
+			"[ATAudioOutputSDL3] Failed to set %u Hz stream source format: %s; "
+			"falling back to 48000 Hz\n",
+			mSamplingRate, SDL_GetError());
+		mSamplingRate = 48000;
+	}
 
 	RecomputeBuffering();
 	RecomputeResamplingRate();
@@ -844,10 +853,18 @@ bool ATAudioOutputSDL3::StreamPut(const void *data, uint32 bytes) {
 	if (!mpStream || !bytes)
 		return true;
 
-	if (!SDL_PutAudioStreamData(mpStream, data, (int)bytes))
-		return false;
+	const uint8 *src = static_cast<const uint8 *>(data);
+	while (bytes) {
+		const int chunk = bytes > (uint32)INT_MAX ? INT_MAX : (int)bytes;
 
-	mBytesWritten += bytes;
+		if (!SDL_PutAudioStreamData(mpStream, src, chunk))
+			return false;
+
+		mBytesWritten += (uint32)chunk;
+		src += chunk;
+		bytes -= (uint32)chunk;
+	}
+
 	return true;
 }
 

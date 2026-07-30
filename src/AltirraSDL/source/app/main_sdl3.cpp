@@ -1379,8 +1379,6 @@ static void RenderAndPresent() {
 	// Update filter mode on texture if setting changed.
 	ATDisplayFilterMode curFilter = ATUIGetDisplayFilterMode();
 	if (curFilter != s_lastAppliedFilter) {
-		if (g_pBackend->GetType() == DisplayBackendType::SDLRenderer)
-			g_pDisplay->UpdateScaleMode();
 		g_pBackend->SetFilterMode(curFilter);
 		s_lastAppliedFilter = curFilter;
 	}
@@ -1933,7 +1931,7 @@ int main(int argc, char *argv[]) {
 		SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
 			"Altirra: display backend = %s, window pixel size = %dx%d",
 			backendName, pxW, pxH);
-		g_pDisplay = new VDVideoDisplaySDL3(g_pRenderer, pxW, pxH);
+		g_pDisplay = new VDVideoDisplaySDL3(g_pWindow, pxW, pxH);
 	}
 
 	// Tell the display whether the GL backend supports screen effects.

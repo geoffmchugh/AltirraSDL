@@ -867,11 +867,10 @@ bool VDAudioOutputDirectSoundW32::Write(const void *data, uint32 len) {
 	if (!len)
 		return true;
 
-	mStreamWritePosition += len;
-
 	bool wroteData = false;
 
 	mMutex.Lock();
+	mStreamWritePosition += len;
 	while(len > 0) {
 		uint32 tc = mBufferSize - mBufferLevel;
 

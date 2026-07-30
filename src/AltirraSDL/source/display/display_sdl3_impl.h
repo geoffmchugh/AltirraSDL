@@ -1,5 +1,5 @@
 //	AltirraSDL - VDVideoDisplaySDL3 full class definition
-//	Include this header in files that need to call Present() or new/delete.
+//	Include this header in files that need the SDL display adapter.
 
 #pragma once
 #include <SDL3/SDL.h>
@@ -15,7 +15,7 @@
 
 class VDVideoDisplaySDL3 final : public IVDVideoDisplay {
 public:
-	VDVideoDisplaySDL3(SDL_Renderer *renderer, int w, int h);
+	VDVideoDisplaySDL3(SDL_Window *window, int w, int h);
 	~VDVideoDisplaySDL3();
 
 	// IVDVideoDisplay
@@ -57,7 +57,7 @@ public:
 	int GetQueuedFrames() const override { return mPendingFrame ? 1 : 0; }
 	bool IsFramePending() const override { return mPendingFrame != nullptr; }
 	VDDVSyncStatus GetVSyncStatus() const override { return {}; }
-	vdrect32 GetMonitorRect() override { return {0, 0, mWidth, mHeight}; }
+	vdrect32 GetMonitorRect() override;
 	VDDMonitorInfo GetMonitorInformation() override { return {}; }
 	bool IsScreenFXPreferred() const override { return mbScreenFXPreferred; }
 	VDDHighColorAvailability GetHDRCapability() const override {
@@ -71,26 +71,15 @@ public:
 	void SetProfileHook(const vdfunction<void(ProfileEvent, uintptr)>&) override {}
 	void RequestCapture(vdfunction<void(const VDPixmap*)>) override {}
 
-	// Upload pending frame pixels to the SDL texture (does NOT present).
-	// Returns true if the texture has valid content to render.
+	// Convert a pending core frame into backend-ready XRGB8888 pixels.
+	// Texture upload and presentation are owned by IDisplayBackend.
 	bool PrepareFrame();
 
-	// Legacy: upload + clear + render + present (used before ImGui integration)
-	void Present();
-
-	// Update SDL_SCALEMODE on the existing texture to match the current
-	// ATDisplayFilterMode setting.  Called when the user changes filter mode.
-	void UpdateScaleMode();
-
-	SDL_Texture* GetTexture() const { return mpTexture; }
-	int GetTextureWidth() const { return mTextureW; }
-	int GetTextureHeight() const { return mTextureH; }
-
-	// GL path: expose converted pixel data for GPU upload
+	// Expose converted pixel data for the selected display backend.
 	const void *GetFramePixels() const { return mHasFramePixels ? mConvertBuffer.data() : nullptr; }
-	int GetFramePixelWidth() const { return mTextureW; }
-	int GetFramePixelHeight() const { return mTextureH; }
-	int GetFramePixelPitch() const { return mTextureW * 4; }
+	int GetFramePixelWidth() const { return mFrameW; }
+	int GetFramePixelHeight() const { return mFrameH; }
+	int GetFramePixelPitch() const { return mFrameW * 4; }
 
 	// GL path: screen FX info from GTIA's SetSourcePersistent call
 	bool HasScreenFX() const { return mHasScreenFX; }
@@ -100,16 +89,15 @@ public:
 	void SetScreenFXPreferred(bool v) { mbScreenFXPreferred = v; }
 
 private:
-	SDL_Renderer *mpRenderer;
-	SDL_Texture  *mpTexture = nullptr;
+	SDL_Window *mpWindow;
 
 	VDVideoDisplayFrame *mPendingFrame = nullptr;
 	VDVideoDisplayFrame *mPrevFrame    = nullptr;
 
 	int mWidth;
 	int mHeight;
-	int mTextureW = 0;
-	int mTextureH = 0;
+	int mFrameW = 0;
+	int mFrameH = 0;
 
 	bool mbScreenFXPreferred = false;
 	bool mHasScreenFX = false;

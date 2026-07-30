@@ -12,6 +12,7 @@
 #include <vd2/system/text.h>
 #include <vd2/system/registry.h>
 #include <vd2/Dita/accel.h>
+#include <at/atui/constants.h>
 #include <at/atui/uicommandmanager.h>
 
 #include "uikeyboard.h"
@@ -333,8 +334,8 @@ uint32 SDLScancodeToVK(SDL_Scancode sc) {
 	case SDL_SCANCODE_F11: return kATInputCode_KeyF11;
 	case SDL_SCANCODE_F12: return kATInputCode_KeyF12;
 
-	case SDL_SCANCODE_PAUSE:    return 0x13;  // VK_PAUSE
-	case SDL_SCANCODE_CAPSLOCK: return 0x14;  // VK_CAPITAL
+	case SDL_SCANCODE_PAUSE:    return kATUIVK_Pause;
+	case SDL_SCANCODE_CAPSLOCK: return kATUIVK_CapsLock;
 
 	case SDL_SCANCODE_KP_0: return kATInputCode_KeyNumpad0;
 	case SDL_SCANCODE_KP_1: return kATInputCode_KeyNumpad1;

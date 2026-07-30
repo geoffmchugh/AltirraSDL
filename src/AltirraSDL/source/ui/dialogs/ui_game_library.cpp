@@ -35,6 +35,9 @@
 
 #include "ui_main.h"
 #include "ui/gamelibrary/game_library.h"
+#include "ui/gamelibrary/game_library_art.h"
+#include "ui_game_metadata.h"
+#include "media/metadata_scraper.h"
 #include "ui_file_dialog_sdl3.h"
 
 // External glue — defined elsewhere in the SDL3 front-end.
@@ -43,6 +46,7 @@ extern void ATRegistryFlushToDisk();
 extern void GameBrowser_Init();
 extern void GameBrowser_Invalidate();
 extern ATGameLibrary *GetGameLibrary();
+extern GameArtCache *GetGameArtCache();
 
 namespace {
 
@@ -86,6 +90,30 @@ bool                g_openVariantPopup = false;
 bool                g_openClearLibPopup = false;
 bool                g_pendingClose     = false; // request dialog dismiss after a successful boot
 size_t              g_variantEntryIdx  = 0;
+
+// Filtered + sorted row order, rebuilt inside the table each frame and
+// read afterwards by the keyboard handler.  Kept at namespace scope
+// rather than local so the handler can run *after* EndTable() — the sort
+// spec is only readable inside the table, and building the order there
+// keeps a sort change visible on the same frame the user clicks it.
+std::vector<int>    g_order;
+
+// Set by the keyboard handler; consumed by the next frame's table render
+// to bring the newly selected row into view.  One frame of latency,
+// which is invisible, and it avoids having to predict row geometry
+// outside the table.
+bool                g_scrollToSelected = false;
+
+// Details pane is a splitter inside this same window rather than a
+// second ImGui::Begin — that keeps it out of imgui.ini and avoids the
+// "dialog opens off-screen after a resolution change" problem entirely
+// (see CLAUDE.md, "ImGui window positioning").  Its width is a live
+// splitter drag; only the visibility is persisted, because the width is
+// meaningless once the dialog is resized.
+float               g_detailsWidth     = 320.0f;
+const float         kDetailsMinWidth   = 240.0f;
+const float         kDetailsMaxWidth   = 520.0f;
+const float         kTableMinWidth     = 300.0f;
 
 // Lowercased-substring match for the filter textbox.
 bool FilterMatch(const VDStringA &haystack, const char *needle) {
@@ -194,31 +222,300 @@ bool ClassifyAddFile(const VDStringW &path, GameSource &out) {
 
 // ----- Tab: Games ----------------------------------------------------------
 
-void RenderTabGames(ATGameLibrary &lib) {
-	// Top row: filter + status.
-	ImGui::SetNextItemWidth(-180.0f);
-	ImGui::InputTextWithHint("##filter", "Filter by name...", g_filterBuf,
-		sizeof(g_filterBuf));
-
-	ImGui::SameLine();
-	if (lib.IsScanning()) {
-		ImGui::TextColored(ImVec4(0.45f, 0.65f, 0.90f, 1.0f),
-			"Scanning... (%d)", lib.GetScanProgress());
+// Launch callback handed to the details pane.  Same rules as a
+// double-click in the table: one variant boots straight away, several
+// pop the picker.
+void LaunchSelected(void *userData, int entryIndex) {
+	ATGameLibrary &lib = *(ATGameLibrary *)userData;
+	if (entryIndex < 0 || (size_t)entryIndex >= lib.GetEntries().size())
+		return;
+	if (lib.GetEntries()[entryIndex].mVariants.size() > 1) {
+		g_variantEntryIdx = (size_t)entryIndex;
+		g_openVariantPopup = true;
 	} else {
-		size_t n = lib.GetEntryCount();
-		VDStringA ago = FormatAgo(lib.GetLastScanTime());
-		if (!ago.empty())
-			ImGui::Text("%zu games  ·  %s", n, ago.c_str());
-		else
-			ImGui::Text("%zu games", n);
+		BootVariant(lib, (size_t)entryIndex, 0);
+	}
+}
+
+// Draw one library row's Name cell: cover thumbnail, title, and — when
+// we have metadata — a muted second line carrying publisher / year /
+// genre.  This is what makes a downloaded description visible *in the
+// list*, instead of only in the pane.
+//
+// Everything is drawn straight to the draw list at absolute screen
+// coordinates.  ImGui pushes a per-cell clip rect, so long titles and
+// wide fact lines are clipped to the Name column for free.
+void DrawNameCell(ATGameLibrary &lib, const GameEntry &e,
+	const ImVec2 &rowMin, float cellW, float rowH)
+{
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const float pad = 4.0f;
+	const float thumbSz = rowH - pad * 2.0f;
+	const float thumbX = rowMin.x + pad;
+	const float thumbY = rowMin.y + pad;
+
+	int artW = 0, artH = 0;
+	ImTextureID artTex = (ImTextureID)0;
+	GameArtCache *cache = GetGameArtCache();
+	// GetTileArtPath applies the art precedence: user-set custom art
+	// beats downloaded metadata media, which beats scanner-matched art.
+	const VDStringW artPath = lib.GetTileArtPath(e);
+	if (cache && !artPath.empty())
+		artTex = cache->GetTexture(artPath, &artW, &artH);
+
+	dl->AddRectFilled(ImVec2(thumbX, thumbY),
+		ImVec2(thumbX + thumbSz, thumbY + thumbSz),
+		IM_COL32(24, 24, 28, 255), 3.0f);
+
+	if (artTex && artW > 0 && artH > 0) {
+		// Fit inside the square, centred, aspect preserved.
+		float scale = thumbSz / (float)artW;
+		const float scaleH = thumbSz / (float)artH;
+		if (scaleH < scale) scale = scaleH;
+		const float dw = (float)artW * scale;
+		const float dh = (float)artH * scale;
+		dl->AddImage(artTex,
+			ImVec2(thumbX + (thumbSz - dw) * 0.5f,
+				thumbY + (thumbSz - dh) * 0.5f),
+			ImVec2(thumbX + (thumbSz + dw) * 0.5f,
+				thumbY + (thumbSz + dh) * 0.5f));
+	} else {
+		// No art: a media-type initial keeps the column from looking
+		// broken and still tells the user something useful.
+		const char *badge = "?";
+		if (!e.mVariants.empty()) {
+			switch (e.mVariants[0].mType) {
+			case GameMediaType::Disk:       badge = "D"; break;
+			case GameMediaType::Executable: badge = "X"; break;
+			case GameMediaType::Cartridge:  badge = "C"; break;
+			case GameMediaType::Cassette:   badge = "T"; break;
+			default: break;
+			}
+		}
+		const ImVec2 bs = ImGui::CalcTextSize(badge);
+		dl->AddText(ImVec2(thumbX + (thumbSz - bs.x) * 0.5f,
+			thumbY + (thumbSz - bs.y) * 0.5f),
+			ImGui::GetColorU32(ImGuiCol_TextDisabled), badge);
 	}
 
-	// Table: Name | Type | Last Played | Plays
-	if (ImGui::BeginTable("##GamesTbl", 5,
+	const float textX = thumbX + thumbSz + 8.0f;
+	const float lineH = ImGui::GetTextLineHeight();
+	const VDStringA nameU8 = VDTextWToU8(e.mDisplayName);
+	const VDStringA sub = ATUIMetadataFactsLine(e);
+
+	if (sub.empty()) {
+		// One line: centre it against the thumbnail.
+		dl->AddText(ImVec2(textX, rowMin.y + (rowH - lineH) * 0.5f),
+			ImGui::GetColorU32(ImGuiCol_Text), nameU8.c_str());
+	} else {
+		const float blockH = lineH * 2.0f;
+		const float top = rowMin.y + (rowH - blockH) * 0.5f;
+		dl->AddText(ImVec2(textX, top),
+			ImGui::GetColorU32(ImGuiCol_Text), nameU8.c_str());
+		dl->AddText(ImVec2(textX, top + lineH),
+			ImGui::GetColorU32(ImGuiCol_TextDisabled), sub.c_str());
+	}
+
+	(void)cellW;
+}
+
+// Vertically centre a single line of text in a taller table row.
+void CenterInRow(float rowH) {
+	const float lineH = ImGui::GetTextLineHeight();
+	ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (rowH - lineH) * 0.5f);
+}
+
+// Keyboard navigation for the table.  The Desktop build deliberately
+// leaves ImGuiConfigFlags_NavEnableKeyboard off (it would change focus
+// behaviour across every dialog in the app), so arrow-key browsing is
+// implemented here against the visible row order instead.  This is what
+// makes the details pane follow the keyboard the way it follows the
+// mouse.
+void HandleTableKeys(ATGameLibrary &lib) {
+	// Never steal keys from the filter box or any other active widget.
+	if (ImGui::IsAnyItemActive())
+		return;
+	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+		return;
+
+	// While this tab has focus the keyboard belongs to it, not to the
+	// Atari.  The Desktop build leaves ImGuiConfigFlags_NavEnableKeyboard
+	// off, so io.WantCaptureKeyboard would otherwise stay false for a
+	// plain non-modal window and the main loop would forward these very
+	// same arrows to the emulated joystick — browsing the library would
+	// jiggle the stick in the running game, and Enter would launch a game
+	// *and* press Return on the Atari.
+	//
+	// Requested from the frame the window gains focus, so it is already
+	// in effect by the time the user can press anything.  Global
+	// accelerators are dispatched ahead of this check in the main loop
+	// and keep working.
+	ImGui::SetNextFrameWantCaptureKeyboard(true);
+
+	if (g_order.empty())
+		return;
+
+	int cur = -1;
+	for (size_t i = 0; i < g_order.size(); ++i) {
+		if (g_order[i] == g_selectedEntry) { cur = (int)i; break; }
+	}
+
+	const int last = (int)g_order.size() - 1;
+	int next = cur;
+
+	if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true))
+		next = (cur < 0) ? 0 : (cur < last ? cur + 1 : last);
+	else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))
+		next = (cur < 0) ? last : (cur > 0 ? cur - 1 : 0);
+	else if (ImGui::IsKeyPressed(ImGuiKey_PageDown, true))
+		next = (cur < 0) ? 0 : (cur + 10 > last ? last : cur + 10);
+	else if (ImGui::IsKeyPressed(ImGuiKey_PageUp, true))
+		next = (cur < 0) ? 0 : (cur - 10 < 0 ? 0 : cur - 10);
+	else if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
+		next = 0;
+	else if (ImGui::IsKeyPressed(ImGuiKey_End, false))
+		next = last;
+	else if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)
+		|| ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))
+	{
+		if (cur >= 0)
+			LaunchSelected(&lib, g_order[cur]);
+		return;
+	}
+
+	if (next != cur && next >= 0) {
+		g_selectedEntry = g_order[next];
+		g_scrollToSelected = true;
+	}
+}
+
+void RenderTabGames(ATGameLibrary &lib) {
+	GameLibrarySettings settings = lib.GetSettings();
+
+	// Top row: [filter] [status] .......... [Show/Hide details]
+	//
+	// Every width here is measured rather than assumed.  The previous
+	// version gave the filter "all but 260px" and then right-aligned the
+	// button at a fixed offset, which collided as soon as the status text
+	// grew: "9219 games · 53 min ago" is far wider than "12 games", and
+	// it ran straight under the button.
+	//
+	// The filter is also capped.  A text box stretched across a 1600px
+	// dialog looks broken, and nobody needs 1600px to type a few letters.
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float rowStartX = ImGui::GetCursorPosX();
+		const float avail = ImGui::GetContentRegionAvail().x;
+		const float spacing = style.ItemSpacing.x;
+
+		// Status text, measured before anything is laid out.
+		char status[96];
+		if (lib.IsScanning()) {
+			snprintf(status, sizeof status, "Scanning... (%d)",
+				lib.GetScanProgress());
+		} else {
+			const VDStringA ago = FormatAgo(lib.GetLastScanTime());
+			if (!ago.empty())
+				snprintf(status, sizeof status, "%zu games  \xC2\xB7  %s",
+					lib.GetEntryCount(), ago.c_str());
+			else
+				snprintf(status, sizeof status, "%zu games",
+					lib.GetEntryCount());
+		}
+		const float statusW = ImGui::CalcTextSize(status).x;
+
+		const char *toggleLabel = settings.mbShowDetailsPanel
+			? "Hide details" : "Show details";
+		const float buttonW = ImGui::CalcTextSize("Hide details").x
+			+ style.FramePadding.x * 2.0f + 12.0f;
+
+		const float kFilterMin = 160.0f;
+		const float kFilterMax = 340.0f;
+
+		// Give the filter what is left after the fixed parts, then clamp.
+		float filterW = avail - buttonW - spacing * 2.0f - statusW;
+		if (filterW > kFilterMax) filterW = kFilterMax;
+
+		// Too narrow to seat all three: the status line is the one that
+		// can go.  It is a nicety; the filter and the toggle are not.
+		bool showStatus = true;
+		if (filterW < kFilterMin) {
+			filterW = avail - buttonW - spacing;
+			showStatus = false;
+			if (filterW > kFilterMax) filterW = kFilterMax;
+			if (filterW < 60.0f)      filterW = 60.0f;
+		}
+
+		ImGui::SetNextItemWidth(filterW);
+		ImGui::InputTextWithHint("##filter", "Filter by name...",
+			g_filterBuf, sizeof(g_filterBuf));
+
+		if (showStatus) {
+			ImGui::SameLine();
+			if (lib.IsScanning()) {
+				ImGui::TextColored(ImVec4(0.45f, 0.65f, 0.90f, 1.0f),
+					"%s", status);
+			} else {
+				ImGui::TextUnformatted(status);
+			}
+		}
+
+		// Details toggle, right-aligned.  It is a view control, not an
+		// action on the selected game, so it belongs with the filter
+		// rather than down among the launch buttons — and up here it is
+		// actually discoverable.
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(rowStartX + avail - buttonW);
+		if (ImGui::Button(toggleLabel, ImVec2(buttonW, 0))) {
+			settings.mbShowDetailsPanel = !settings.mbShowDetailsPanel;
+			lib.SetSettings(settings);
+			lib.SaveSettingsToRegistry();
+			ATRegistryFlushToDisk();
+		}
+	}
+
+	// Metadata toolbar: download action + coverage counts.
+	ATUIRenderMetadataToolbar(lib, g_selectedEntry);
+
+	const bool showDetails = settings.mbShowDetailsPanel;
+
+	// The details pane is a splitter inside this window.  Below a certain
+	// dialog width there is no honest way to show both, so the table wins
+	// — silently, because the user did not do anything wrong.
+	const float totalW = ImGui::GetContentRegionAvail().x;
+	const float splitterW = 6.0f;
+	float detailsW = 0.0f;
+	if (showDetails && totalW >= kTableMinWidth + kDetailsMinWidth + splitterW) {
+		detailsW = g_detailsWidth;
+		const float maxW = totalW - kTableMinWidth - splitterW;
+		if (detailsW > maxW)             detailsW = maxW;
+		if (detailsW > kDetailsMaxWidth) detailsW = kDetailsMaxWidth;
+		if (detailsW < kDetailsMinWidth) detailsW = kDetailsMinWidth;
+	}
+
+	// Absolute, not a negative reservation: the same number has to size
+	// the table, the splitter and the details pane, and a negative size
+	// resolves against whatever the cursor happens to be at, which is
+	// not the same for all three once SameLine has moved it.
+	const float bodyH = ImGui::GetContentRegionAvail().y
+		- ImGui::GetFrameHeightWithSpacing() - 4.0f;
+	const float tableW = detailsW > 0.0f
+		? totalW - detailsW - splitterW
+		: 0.0f;
+
+	// Two-line rows: title on top, publisher / year / genre underneath.
+	const float rowH = ImGui::GetTextLineHeight() * 2.0f + 8.0f;
+	// What a row actually measures once the table adds its cell padding.
+	// The clipper needs the real figure or SetScrollHereY lands short on
+	// long lists.
+	const float clipRowH = rowH + ImGui::GetStyle().CellPadding.y * 2.0f;
+
+	// Table: Name | Type | Variants | Last Played | Plays | Metadata
+	if (ImGui::BeginTable("##GamesTbl", 6,
 		ImGuiTableFlags_Borders      | ImGuiTableFlags_RowBg      |
 		ImGuiTableFlags_Sortable     | ImGuiTableFlags_Resizable  |
 		ImGuiTableFlags_ScrollY,
-		ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 4.0f)))
+		ImVec2(tableW, bodyH)))
 	{
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("Name",        ImGuiTableColumnFlags_WidthStretch, 0.55f, 0);
@@ -226,6 +523,7 @@ void RenderTabGames(ATGameLibrary &lib) {
 		ImGui::TableSetupColumn("Variants",    ImGuiTableColumnFlags_WidthFixed,   70.0f, 4);
 		ImGui::TableSetupColumn("Last played", ImGuiTableColumnFlags_WidthFixed,   140.0f, 2);
 		ImGui::TableSetupColumn("Plays",       ImGuiTableColumnFlags_WidthFixed,   60.0f, 3);
+		ImGui::TableSetupColumn("Metadata",    ImGuiTableColumnFlags_WidthFixed,   90.0f, 5);
 		ImGui::TableHeadersRow();
 
 		// Pick up sort spec changes.
@@ -241,15 +539,15 @@ void RenderTabGames(ATGameLibrary &lib) {
 		const auto &entries = lib.GetEntries();
 
 		// Build a filtered, sorted index list.
-		std::vector<int> order;
-		order.reserve(entries.size());
+		g_order.clear();
+		g_order.reserve(entries.size());
 		for (size_t i = 0; i < entries.size(); ++i) {
 			VDStringA nameU8 = VDTextWToU8(entries[i].mDisplayName);
 			if (FilterMatch(nameU8, g_filterBuf))
-				order.push_back((int)i);
+				g_order.push_back((int)i);
 		}
 
-		std::sort(order.begin(), order.end(),
+		std::sort(g_order.begin(), g_order.end(),
 			[&](int a, int b) {
 				const GameEntry &ea = entries[a];
 				const GameEntry &eb = entries[b];
@@ -279,47 +577,94 @@ void RenderTabGames(ATGameLibrary &lib) {
 				case 4:
 					cmp = (int)ea.mVariants.size() - (int)eb.mVariants.size();
 					break;
+				case 5:
+					cmp = (int)ea.mMeta.mStatus - (int)eb.mMeta.mStatus;
+					break;
 				}
 				return g_sortDescending ? (cmp > 0) : (cmp < 0);
 			});
 
+		// Keep the selection meaningful: a filter or a rescan can drop
+		// the selected entry out of the visible set, and a details pane
+		// describing a game that is not on screen is worse than none.
+		int selectedRow = -1;
+		for (size_t i = 0; i < g_order.size(); ++i) {
+			if (g_order[i] == g_selectedEntry) { selectedRow = (int)i; break; }
+		}
+		if (selectedRow < 0) {
+			g_selectedEntry = g_order.empty() ? -1 : g_order[0];
+			selectedRow = g_order.empty() ? -1 : 0;
+		}
+
 		ImGuiListClipper clipper;
-		clipper.Begin((int)order.size());
+		clipper.Begin((int)g_order.size(), clipRowH);
+		// The row we are about to scroll to must be submitted even when
+		// it is currently clipped, otherwise SetScrollHereY has nothing
+		// to anchor against.  Strictly after Begin() and before the
+		// first Step(): Begin() is what resets DisplayStart to -1, and
+		// IncludeItemsByIndex asserts on that.  (In a release build the
+		// assert is compiled out and the request is silently dropped,
+		// so this would have shown up only as scroll-to-selection
+		// failing on rows that happened to be clipped.)
+		if (g_scrollToSelected && selectedRow >= 0)
+			clipper.IncludeItemByIndex(selectedRow);
 		while (clipper.Step()) {
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-				int idx = order[row];
+				int idx = g_order[row];
 				const GameEntry &e = entries[idx];
-				ImGui::TableNextRow();
+				ImGui::TableNextRow(ImGuiTableRowFlags_None, rowH);
 				ImGui::PushID(idx);
 
 				// Name column — selectable spans full row.
 				ImGui::TableSetColumnIndex(0);
-				VDStringA nameU8 = VDTextWToU8(e.mDisplayName);
+				const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+				const float cellW = ImGui::GetContentRegionAvail().x;
 				bool selected = (g_selectedEntry == idx);
-				if (ImGui::Selectable(nameU8.c_str(), selected,
+				if (ImGui::Selectable("##row", selected,
 					ImGuiSelectableFlags_SpanAllColumns |
-					ImGuiSelectableFlags_AllowDoubleClick))
+					ImGuiSelectableFlags_AllowDoubleClick,
+					ImVec2(0, rowH)))
 				{
 					g_selectedEntry = idx;
-					if (ImGui::IsMouseDoubleClicked(0)) {
-						if (e.mVariants.size() > 1) {
-							g_variantEntryIdx = (size_t)idx;
-							g_openVariantPopup = true;
-						} else if (!e.mVariants.empty()) {
-							BootVariant(lib, (size_t)idx, 0);
-						}
-					}
+					if (ImGui::IsMouseDoubleClicked(0))
+						LaunchSelected(&lib, idx);
 				}
 
+				if (g_scrollToSelected && selected) {
+					ImGui::SetScrollHereY(0.5f);
+					g_scrollToSelected = false;
+				}
+
+				// Right-click acts on the row under the cursor, which
+				// is not necessarily the selected one — so select it
+				// first, otherwise the menu would silently operate on a
+				// different game than the one the user pointed at.
+				if (ImGui::BeginPopupContextItem("##rowmenu")) {
+					g_selectedEntry = idx;
+					if (ImGui::MenuItem("Launch", nullptr, false,
+						!e.mVariants.empty()))
+					{
+						LaunchSelected(&lib, idx);
+					}
+					ImGui::Separator();
+					ATUIRenderMetadataRowMenu(lib, idx);
+					ImGui::EndPopup();
+				}
+
+				DrawNameCell(lib, e, rowMin, cellW, rowH);
+
 				ImGui::TableSetColumnIndex(1);
+				CenterInRow(rowH);
 				GameMediaType t = e.mVariants.empty()
 					? GameMediaType::Unknown : e.mVariants[0].mType;
 				ImGui::TextUnformatted(MediaTypeLabel(t));
 
 				ImGui::TableSetColumnIndex(2);
+				CenterInRow(rowH);
 				ImGui::Text("%zu", e.mVariants.size());
 
 				ImGui::TableSetColumnIndex(3);
+				CenterInRow(rowH);
 				if (e.mLastPlayed > 0) {
 					char tbuf[32];
 					time_t tt = (time_t)e.mLastPlayed;
@@ -332,34 +677,89 @@ void RenderTabGames(ATGameLibrary &lib) {
 					strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M", &tmv);
 					ImGui::TextUnformatted(tbuf);
 				} else {
-					ImGui::TextDisabled("—");
+					ImGui::TextDisabled("\xE2\x80\x94");
 				}
 
 				ImGui::TableSetColumnIndex(4);
+				CenterInRow(rowH);
 				ImGui::Text("%u", e.mPlayCount);
+
+				ImGui::TableSetColumnIndex(5);
+				CenterInRow(rowH);
+				{
+					const GameMetaStatus st = e.mMeta.mStatus;
+					ImVec4 colour(0.55f, 0.55f, 0.55f, 1.0f);
+					if (st == GameMetaStatus::Matched
+						|| st == GameMetaStatus::UserEdited)
+					{
+						colour = ImVec4(0.45f, 0.80f, 0.45f, 1.0f);
+					} else if (st == GameMetaStatus::Error) {
+						colour = ImVec4(0.95f, 0.60f, 0.40f, 1.0f);
+					}
+					ImGui::TextColored(colour, "%s",
+						ATUIMetadataStatusLabel(st));
+				}
 
 				ImGui::PopID();
 			}
 		}
 
+		// The target row may have been filtered away between the key
+		// press and this frame; drop the request rather than leaving it
+		// armed to fire on an unrelated row later.
+		g_scrollToSelected = false;
+
 		ImGui::EndTable();
 	}
+
+	if (detailsW > 0.0f) {
+		// Splitter.  An invisible button carrying the resize cursor —
+		// the same idiom ImGui's own docking splitters use.
+		ImGui::SameLine(0, 0);
+		ImGui::InvisibleButton("##split", ImVec2(splitterW, bodyH));
+		if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+		if (ImGui::IsItemActive())
+			g_detailsWidth = detailsW - ImGui::GetIO().MouseDelta.x;
+		{
+			// Draw the grip so the splitter is visible, not just felt.
+			const ImVec2 mn = ImGui::GetItemRectMin();
+			const ImVec2 mx = ImGui::GetItemRectMax();
+			const float cx = (mn.x + mx.x) * 0.5f;
+			ImGui::GetWindowDrawList()->AddLine(ImVec2(cx, mn.y),
+				ImVec2(cx, mx.y),
+				ImGui::GetColorU32(ImGui::IsItemActive()
+					? ImGuiCol_SeparatorActive
+					: (ImGui::IsItemHovered() ? ImGuiCol_SeparatorHovered
+					                          : ImGuiCol_Separator)));
+		}
+
+		ImGui::SameLine(0, 0);
+		if (ImGui::BeginChild("##GameDetails", ImVec2(detailsW, bodyH),
+			ImGuiChildFlags_Borders))
+		{
+			ATUIRenderMetadataDetails(lib, g_selectedEntry,
+				LaunchSelected, &lib);
+		}
+		ImGui::EndChild();
+	}
+
+	// Keyboard browsing runs after the table so it can see this frame's
+	// row order (which is only known once the sort spec has been read).
+	HandleTableKeys(lib);
 
 	// Bottom row: Launch button.
 	bool canLaunch = (g_selectedEntry >= 0)
 		&& ((size_t)g_selectedEntry < lib.GetEntries().size())
 		&& !lib.GetEntries()[g_selectedEntry].mVariants.empty();
 	if (!canLaunch) ImGui::BeginDisabled();
-	if (ImGui::Button("Launch", ImVec2(120, 0))) {
-		const auto &e = lib.GetEntries()[g_selectedEntry];
-		if (e.mVariants.size() > 1) {
-			g_variantEntryIdx = (size_t)g_selectedEntry;
-			g_openVariantPopup = true;
-		} else {
-			BootVariant(lib, (size_t)g_selectedEntry, 0);
-		}
-	}
+	if (ImGui::Button("Launch", ImVec2(120, 0)))
+		LaunchSelected(&lib, g_selectedEntry);
 	if (!canLaunch) ImGui::EndDisabled();
+
+	ImGui::SameLine();
+	ImGui::TextDisabled("Double-click or Enter to play  \xC2\xB7  "
+		"arrow keys to browse  \xC2\xB7  right-click for more");
 }
 
 // ----- Tab: Sources --------------------------------------------------------
@@ -642,7 +1042,7 @@ void ATUIRenderGameLibrary(ATSimulator & /*sim*/, ATUIState &state, SDL_Window *
 	GameBrowser_Init();
 	ATGameLibrary *libp = GetGameLibrary();
 
-	ImGui::SetNextWindowSize(ImVec2(780, 520), ImGuiCond_Appearing);
+	ImGui::SetNextWindowSize(ImVec2(1000, 620), ImGuiCond_Appearing);
 	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
 		ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
@@ -666,18 +1066,33 @@ void ATUIRenderGameLibrary(ATSimulator & /*sim*/, ATUIState &state, SDL_Window *
 	if (lib.IsScanComplete())
 		lib.ConsumeScanResults();
 
+	// Same contract for the metadata scraper: workers post results, the
+	// main thread applies them.  Doing it here — not in the tab body —
+	// means a run keeps making progress while the user is on any tab.
+	GameArtCache *artCache = GetGameArtCache();
+	if (artCache)
+		artCache->ProcessPending();
+	if (ATMetadataGetScraper().ConsumeResults(lib, artCache))
+		GameBrowser_Invalidate();
+
 	DrainPendingPicks(lib);
 
 	// Tab bar.
 	if (ImGui::BeginTabBar("##GameLibTabs")) {
-		if (ImGui::BeginTabItem("Games"))   { RenderTabGames(lib);            ImGui::EndTabItem(); }
-		if (ImGui::BeginTabItem("Sources")) { RenderTabSources(lib, window);  ImGui::EndTabItem(); }
-		if (ImGui::BeginTabItem("Options")) { RenderTabOptions(lib);          ImGui::EndTabItem(); }
+		if (ImGui::BeginTabItem("Games"))    { RenderTabGames(lib);            ImGui::EndTabItem(); }
+		if (ImGui::BeginTabItem("Sources"))  { RenderTabSources(lib, window);  ImGui::EndTabItem(); }
+		if (ImGui::BeginTabItem("Metadata")) { ATUIRenderMetadataTab(lib);     ImGui::EndTabItem(); }
+		if (ImGui::BeginTabItem("Options"))  { RenderTabOptions(lib);          ImGui::EndTabItem(); }
 		ImGui::EndTabBar();
 	}
 
+	// Progress lives outside the tab bar so a run stays visible and
+	// cancellable no matter which tab the user is looking at.
+	ATUIRenderMetadataProgress(lib);
+
 	RenderVariantPopup(lib);
 	RenderClearLibPopup(lib);
+	ATUIRenderMetadataRemoveConfirm(lib);
 
 	ImGui::End();
 

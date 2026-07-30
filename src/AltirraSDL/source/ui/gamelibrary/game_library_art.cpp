@@ -371,6 +371,45 @@ void GameArtCache::Clear() {
 	mKeyToIndex.clear();
 }
 
+void GameArtCache::Invalidate(const VDStringW &artPath) {
+	if (artPath.empty())
+		return;
+
+	// Delete the scaled thumbnail first — it is keyed on the path, so a
+	// changed image behind an unchanged path would otherwise keep
+	// resolving to the old picture.
+	const VDStringA thumbPath = GetThumbPath(artPath);
+	if (!thumbPath.empty())
+		SDL_RemovePath(thumbPath.c_str());
+
+	// Then drop the in-memory entry, using the same swap-and-pop removal
+	// as EvictOldest so mKeyToIndex stays consistent with mEntries.  A
+	// load already queued for this key is harmless: ProcessPending
+	// discards results whose key is no longer in the map.
+	const std::wstring key(artPath.c_str(), artPath.size());
+	auto it = mKeyToIndex.find(key);
+	if (it == mKeyToIndex.end())
+		return;
+
+	const size_t index = it->second;
+	if (index >= mEntries.size()) {
+		mKeyToIndex.erase(it);
+		return;
+	}
+
+	DestroyEntry(mEntries[index]);
+	mKeyToIndex.erase(it);
+
+	const size_t lastIdx = mEntries.size() - 1;
+	if (index != lastIdx) {
+		auto keyIt = mKeyToIndex.find(mEntries[lastIdx].mKey);
+		if (keyIt != mKeyToIndex.end())
+			keyIt->second = index;
+		mEntries[index] = std::move(mEntries[lastIdx]);
+	}
+	mEntries.pop_back();
+}
+
 void GameArtCache::EvictOldest() {
 	if (mEntries.empty())
 		return;

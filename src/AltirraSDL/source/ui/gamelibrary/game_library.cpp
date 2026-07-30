@@ -23,6 +23,8 @@
 #include <at/atcore/vfs.h>
 
 #include "game_library.h"
+#include "media/metadata_settings.h"
+#include "media/metadata_screenscraper.h"
 
 // =========================================================================
 // Extension classification
@@ -348,6 +350,61 @@ static GameMediaType MediaTypeFromString(const wchar_t *s) {
 	return GameMediaType::Unknown;
 }
 
+static const wchar_t *MetaStatusToString(GameMetaStatus s) {
+	switch (s) {
+		case GameMetaStatus::Matched:    return L"matched";
+		case GameMetaStatus::NotFound:   return L"notfound";
+		case GameMetaStatus::Error:      return L"error";
+		case GameMetaStatus::UserEdited: return L"useredited";
+		default:                         return L"none";
+	}
+}
+
+static GameMetaStatus MetaStatusFromString(const wchar_t *s) {
+	if (wcscmp(s, L"matched") == 0)    return GameMetaStatus::Matched;
+	if (wcscmp(s, L"notfound") == 0)   return GameMetaStatus::NotFound;
+	if (wcscmp(s, L"error") == 0)      return GameMetaStatus::Error;
+	if (wcscmp(s, L"useredited") == 0) return GameMetaStatus::UserEdited;
+	return GameMetaStatus::None;
+}
+
+
+// -------------------------------------------------------------------------
+// CRC32 of a game file's raw bytes.  Shared by the netplay joiner cache
+// lookup and the metadata scraper; see the declaration in game_library.h
+// for the threading contract.
+// -------------------------------------------------------------------------
+bool ATGameComputeFileCRC32(const VDStringW &path, uint32_t &outCRC32,
+	uint64_t &outSize)
+{
+	outCRC32 = 0;
+	outSize = 0;
+	if (path.empty())
+		return false;
+
+	try {
+		vdrefptr<ATVFSFileView> view;
+		ATVFSOpenFileView(path.c_str(), false, ~view);
+		if (!view)
+			return false;
+
+		IVDRandomAccessStream &fs = view->GetStream();
+		const sint64 sz = fs.Length();
+		if (sz <= 0)
+			return false;
+
+		std::vector<uint8_t> bytes((size_t)sz);
+		fs.Seek(0);
+		fs.Read(bytes.data(), (sint32)bytes.size());
+
+		outCRC32 = VDCRCTable::CRC32.CRC(bytes.data(), bytes.size());
+		outSize = (uint64_t)sz;
+		return true;
+	} catch (...) {
+		return false;
+	}
+}
+
 // =========================================================================
 // ATGameLibrary
 // =========================================================================
@@ -364,6 +421,92 @@ void ATGameLibrary::SetConfigDir(const VDStringA &configDir) {
 	if (!mCachePath.empty() && mCachePath.back() != '/')
 		mCachePath += '/';
 	mCachePath += "gamelibrary.json";
+}
+
+VDStringW ATGameLibrary::ResolveMediaPath(const VDStringW &relative) const {
+	if (relative.empty())
+		return VDStringW();
+
+	// Absolute already (older caches, user-supplied paths, Windows
+	// drive letters) — pass through untouched.
+	if (relative[0] == L'/' || relative[0] == L'\\'
+		|| (relative.size() > 1 && relative[1] == L':'))
+	{
+		return relative;
+	}
+
+	VDStringW full = VDTextU8ToW(mConfigDir);
+	if (!full.empty() && full.back() != L'/' && full.back() != L'\\')
+		full += L'/';
+	full += relative;
+	return full;
+}
+
+GameArtSlot ATGameGetPreferredArtSlot() {
+	const int slot = ATMetadataGetSettings().mArtSlot;
+	if (slot < 0 || slot > (int)GameArtSlot::Logo)
+		return GameArtSlot::Screenshot;
+	return (GameArtSlot)slot;
+}
+
+const VDStringW &ATGameArtSlotPath(const GameEntry &entry, GameArtSlot slot) {
+	static const VDStringW kEmpty;
+	const GameMetadata &m = entry.mMeta;
+	switch (slot) {
+		case GameArtSlot::BoxArt:     return m.mBoxArtPath;
+		case GameArtSlot::TitleShot:  return m.mTitleShotPath;
+		case GameArtSlot::Screenshot: return m.mScreenshotPath;
+		case GameArtSlot::Logo:       return m.mLogoPath;
+		default:                      return kEmpty;
+	}
+}
+
+bool ATGameResolveArtSlot(const GameEntry &entry, GameArtSlot preferred,
+	GameArtSlot &outSlot)
+{
+	if (!ATGameArtSlotPath(entry, preferred).empty()) {
+		outSlot = preferred;
+		return true;
+	}
+
+	// Fixed fallback order, most to least informative about the game:
+	// a screenshot shows what it actually looks like, box art is the next
+	// most recognisable, the title screen after that, and a logo carries
+	// the least.  Deliberately not "whatever slot happens to come first
+	// in the struct" — that ordering was an accident of declaration and
+	// would put a logo ahead of a screenshot.
+	static const GameArtSlot kFallback[] = {
+		GameArtSlot::Screenshot, GameArtSlot::BoxArt,
+		GameArtSlot::TitleShot,  GameArtSlot::Logo,
+	};
+
+	for (GameArtSlot slot : kFallback) {
+		if (slot == preferred)
+			continue;   // already tried, and it was empty
+		if (!ATGameArtSlotPath(entry, slot).empty()) {
+			outSlot = slot;
+			return true;
+		}
+	}
+	return false;
+}
+
+VDStringW ATGameLibrary::GetTileArtPath(const GameEntry &entry) const {
+	// 1. An explicit user choice always wins.  A downloaded cover must
+	//    never silently replace art the user set themselves.
+	if (!entry.mArtPath.empty()
+		&& wcsstr(entry.mArtPath.c_str(), L"/custom_art/") != nullptr)
+	{
+		return entry.mArtPath;
+	}
+
+	// 2. Downloaded media, honouring the global art preference.
+	GameArtSlot slot;
+	if (ATGameResolveArtSlot(entry, ATGameGetPreferredArtSlot(), slot))
+		return ResolveMediaPath(ATGameArtSlotPath(entry, slot));
+
+	// 3. Whatever the scanner matched next to the ROM.
+	return entry.mArtPath;
 }
 
 // =========================================================================
@@ -387,15 +530,15 @@ static bool ParseCacheDocument(const void *buf, size_t size,
 	if (!root.IsObject())
 		return false;
 
-	// Schema versions: 1 = original, 2 = adds gameFileCRC32 to variants.
-	// v1 caches load fine — the new field defaults to 0 ("not yet
-	// computed") so the netplay lazy-CRC path computes and persists
-	// it on first use.  Reject anything else (future formats might
-	// drop fields we expect).
+	// Schema versions: 1 = original, 2 = adds gameFileCRC32 to variants,
+	// 3 = adds the per-entry "meta" object (online metadata + media).
+	// Older caches load fine — every added field has a defaulted meaning
+	// ("CRC not yet computed", "metadata never fetched").  Reject
+	// anything else, since a future format might drop fields we expect.
 	auto version = root[L"version"];
 	if (!version.IsInt()) return false;
 	const int64_t schemaVersion = version.AsInt64();
-	if (schemaVersion != 1 && schemaVersion != 2) return false;
+	if (schemaVersion < 1 || schemaVersion > 3) return false;
 
 	outLastScanTime = 0;
 	auto lastScanTime = root[L"lastScanTime"];
@@ -416,6 +559,11 @@ static bool ParseCacheDocument(const void *buf, size_t size,
 			outCachedSources.push_back(std::move(csi));
 		}
 	}
+
+	// Older caches carry a "removed" array from when removal maintained an
+	// exclusion list.  It is deliberately ignored: removal now removes,
+	// and honouring a stale blocklist would keep games hidden with no UI
+	// left to unhide them.  The member is dropped on the next save.
 
 	outEntries.clear();
 	auto games = root[L"games"];
@@ -438,6 +586,74 @@ static bool ParseCacheDocument(const void *buf, size_t size,
 			auto playCount = g[L"playCount"];
 			if (playCount.IsInt())
 				entry.mPlayCount = (uint32_t)playCount.AsInt64();
+
+			// v3: online metadata.  Absent in v1/v2 caches, which is
+			// exactly GameMetaStatus::None — "never attempted".
+			auto meta = g[L"meta"];
+			if (meta.IsObject()) {
+				GameMetadata &m = entry.mMeta;
+
+				auto readStr = [&](const wchar_t *name, VDStringW &dst) {
+					auto v = meta[name];
+					if (v.IsString())
+						dst = v.AsString();
+				};
+
+				auto status = meta[L"status"];
+				if (status.IsString())
+					m.mStatus = MetaStatusFromString(status.AsString());
+
+				readStr(L"title",       m.mTitle);
+				readStr(L"description", m.mDescription);
+				readStr(L"publisher",   m.mPublisher);
+				readStr(L"developer",   m.mDeveloper);
+				readStr(L"genre",       m.mGenre);
+
+				// Entries scraped before the provider text was decoded
+				// still carry raw "&quot;" in their synopsis.  Decoding
+				// on load repairs them without making the user
+				// re-download a whole library, and the next save writes
+				// the clean text back.  Idempotent in practice: decoded
+				// text has no entities left to decode.
+				ATScreenScraperDecodeEntities(m.mTitle);
+				ATScreenScraperDecodeEntities(m.mDescription);
+				ATScreenScraperDecodeEntities(m.mPublisher);
+				ATScreenScraperDecodeEntities(m.mDeveloper);
+				ATScreenScraperDecodeEntities(m.mGenre);
+				readStr(L"region",      m.mRegion);
+				readStr(L"boxArt",      m.mBoxArtPath);
+				readStr(L"titleShot",   m.mTitleShotPath);
+				readStr(L"screenshot",  m.mScreenshotPath);
+				readStr(L"logo",        m.mLogoPath);
+
+				auto year = meta[L"year"];
+				if (year.IsInt())
+					m.mYear = (uint16_t)year.AsInt64();
+
+				auto players = meta[L"players"];
+				if (players.IsInt())
+					m.mPlayersMax = (uint8_t)players.AsInt64();
+
+				auto rating = meta[L"rating"];
+				if (rating.IsInt())
+					m.mRating = (uint8_t)rating.AsInt64();
+
+				auto provider = meta[L"provider"];
+				if (provider.IsString())
+					m.mProvider = VDTextWToA(provider.AsString());
+
+				auto gameId = meta[L"providerGameId"];
+				if (gameId.IsInt())
+					m.mProviderGameId = (uint32_t)gameId.AsInt64();
+
+				auto fetched = meta[L"fetchedTime"];
+				if (fetched.IsInt())
+					m.mFetchedTime = (uint64_t)fetched.AsInt64();
+
+				auto matchedCrc = meta[L"matchedCRC32"];
+				if (matchedCrc.IsInt())
+					m.mMatchedCRC32 = (uint32_t)matchedCrc.AsInt64();
+			}
 
 			auto variants = g[L"variants"];
 			if (variants.IsArray()) {
@@ -554,7 +770,8 @@ bool ATGameLibrary::LoadCache() {
 	uint64_t                       tmpLastScanTime = 0;
 
 	// Main file is the authoritative state.  Try it first.
-	if (TryLoadCacheFile(cachePath, tmpEntries, tmpSources, tmpLastScanTime)) {
+	if (TryLoadCacheFile(cachePath, tmpEntries, tmpSources, tmpLastScanTime))
+	{
 		mEntries       = std::move(tmpEntries);
 		mCachedSources = std::move(tmpSources);
 		mLastScanTime  = tmpLastScanTime;
@@ -566,7 +783,8 @@ bool ATGameLibrary::LoadCache() {
 	// snapshot written by the previous SaveCache.  Leave mMainFileValid
 	// false so the next SaveCache *won't* overwrite the good .bak with
 	// the known-bad main file during rotation.
-	if (TryLoadCacheFile(bakPath, tmpEntries, tmpSources, tmpLastScanTime)) {
+	if (TryLoadCacheFile(bakPath, tmpEntries, tmpSources, tmpLastScanTime))
+	{
 		mEntries       = std::move(tmpEntries);
 		mCachedSources = std::move(tmpSources);
 		mLastScanTime  = tmpLastScanTime;
@@ -597,9 +815,11 @@ bool ATGameLibrary::WriteCacheFile(const VDStringW &path) const {
 		writer.OpenObject();
 
 		writer.WriteMemberName(L"version");
-		// v2 adds variant.gameFileCRC32 (lazy-filled by netplay cache
-		// lookup).  ParseCacheDocument accepts both 1 and 2.
-		writer.WriteInt(2);
+		// v2 added variant.gameFileCRC32 (lazy-filled by the netplay
+		// cache lookup); v3 adds the per-entry "meta" object holding
+		// online metadata and downloaded media paths.
+		// ParseCacheDocument accepts 1, 2 and 3.
+		writer.WriteInt(3);
 
 		writer.WriteMemberName(L"lastScanTime");
 		writer.WriteInt((sint64)mLastScanTime);
@@ -634,6 +854,70 @@ bool ATGameLibrary::WriteCacheFile(const VDStringW &path) const {
 
 			writer.WriteMemberName(L"playCount");
 			writer.WriteInt((sint64)entry.mPlayCount);
+
+			// v3: only written when there is something to write, so a
+			// library that never used the scraper produces a cache
+			// byte-identical in spirit to v2 (just the version bump).
+			const GameMetadata &m = entry.mMeta;
+			if (m.mStatus != GameMetaStatus::None) {
+				writer.WriteMemberName(L"meta");
+				writer.OpenObject();
+
+				writer.WriteMemberName(L"status");
+				writer.WriteString(MetaStatusToString(m.mStatus));
+
+				auto writeStr = [&](const wchar_t *name,
+					const VDStringW &value)
+				{
+					if (value.empty())
+						return;
+					writer.WriteMemberName(name);
+					writer.WriteString(value.c_str());
+				};
+
+				writeStr(L"title",       m.mTitle);
+				writeStr(L"description", m.mDescription);
+				writeStr(L"publisher",   m.mPublisher);
+				writeStr(L"developer",   m.mDeveloper);
+				writeStr(L"genre",       m.mGenre);
+				writeStr(L"region",      m.mRegion);
+				writeStr(L"boxArt",      m.mBoxArtPath);
+				writeStr(L"titleShot",   m.mTitleShotPath);
+				writeStr(L"screenshot",  m.mScreenshotPath);
+				writeStr(L"logo",        m.mLogoPath);
+
+				if (m.mYear) {
+					writer.WriteMemberName(L"year");
+					writer.WriteInt((sint64)m.mYear);
+				}
+				if (m.mPlayersMax) {
+					writer.WriteMemberName(L"players");
+					writer.WriteInt((sint64)m.mPlayersMax);
+				}
+				if (m.mRating) {
+					writer.WriteMemberName(L"rating");
+					writer.WriteInt((sint64)m.mRating);
+				}
+
+				if (!m.mProvider.empty()) {
+					writer.WriteMemberName(L"provider");
+					writer.WriteString(VDTextAToW(m.mProvider).c_str());
+				}
+				if (m.mProviderGameId) {
+					writer.WriteMemberName(L"providerGameId");
+					writer.WriteInt((sint64)m.mProviderGameId);
+				}
+				if (m.mFetchedTime) {
+					writer.WriteMemberName(L"fetchedTime");
+					writer.WriteInt((sint64)m.mFetchedTime);
+				}
+				if (m.mMatchedCRC32) {
+					writer.WriteMemberName(L"matchedCRC32");
+					writer.WriteInt((sint64)m.mMatchedCRC32);
+				}
+
+				writer.Close();
+			}
 
 			writer.WriteMemberName(L"variants");
 			writer.OpenArray();
@@ -1102,6 +1386,10 @@ int ATGameLibrary::AddBootedGame(const VDStringW &path, bool addToLibrary) {
 		stub.mParentDir = basePath;
 		stub.mLastPlayed = (uint64_t)std::time(nullptr);
 		stub.mPlayCount = 1;
+		// New to the library, so the automatic metadata fetch should
+		// consider it.  Entries created here bypass the scanner, which
+		// is the only other place this flag is set.
+		stub.mbNewlyAdded = true;
 		stub.mVariants.push_back(std::move(var));
 		mEntries.push_back(std::move(stub));
 
@@ -1124,6 +1412,7 @@ int ATGameLibrary::AddBootedGame(const VDStringW &path, bool addToLibrary) {
 
 	entry.mLastPlayed = (uint64_t)std::time(nullptr);
 	entry.mPlayCount = 1;
+	entry.mbNewlyAdded = true;
 
 	// If the file is already covered by an existing folder source (or
 	// would be on a recursive scan), don't add a redundant file source —
@@ -1185,6 +1474,79 @@ int ATGameLibrary::AddBootedGame(const VDStringW &path, bool addToLibrary) {
 	if (wasScanning)
 		StartScan();
 	return FindEntryByVariantPath(path);
+}
+
+bool ATGameLibrary::RemoveEntry(size_t entryIndex) {
+	if (entryIndex >= mEntries.size())
+		return false;
+
+	const GameEntry &entry = mEntries[entryIndex];
+
+	// A game added by booting it is its own file source.  Leaving that
+	// source behind would have ScanFile rebuild the entry on the very
+	// next scan, so the source goes with it — removing the game means
+	// removing the reason it is in the library.
+	//
+	// Games that came from a folder or archive source are a different
+	// case: the source covers many games and is not ours to delete.  The
+	// entry goes now; a later scan of that folder will find the file
+	// again.  That is the honest behaviour for a library that mirrors its
+	// sources, and the confirmation dialogs say so.
+	bool sourcesChanged = false;
+	for (size_t i = mSources.size(); i-- > 0; ) {
+		if (!mSources[i].mbIsFile)
+			continue;
+		for (const auto &var : entry.mVariants) {
+			if (mSources[i].mPath == var.mPath) {
+				mSources.erase(mSources.begin() + i);
+				sourcesChanged = true;
+				break;
+			}
+		}
+	}
+
+	mEntries.erase(mEntries.begin() + entryIndex);
+
+	if (sourcesChanged) {
+		SaveSettingsToRegistry();
+		// The source list lives in the registry, not the cache.  Flush it
+		// now so a process kill (routine on Android) cannot leave the
+		// source behind to resurrect the entry we just removed.
+		extern void ATRegistryFlushToDisk();
+		try { ATRegistryFlushToDisk(); } catch (...) {}
+	}
+	SaveCache();
+	return true;
+}
+
+bool ATGameLibrary::WillRescanRestore(size_t entryIndex) const {
+	if (entryIndex >= mEntries.size())
+		return false;
+
+	// Same containment rules as PurgeRemovedSourceEntries, minus the
+	// file-source case: those sources are dropped along with the entry,
+	// so they cannot bring it back.
+	for (const auto &var : mEntries[entryIndex].mVariants) {
+		for (const auto &src : mSources) {
+			if (src.mbIsFile)
+				continue;
+
+			if (src.mbIsArchive) {
+				if (var.mArchivePath == src.mPath)
+					return true;
+				continue;
+			}
+
+			const VDStringW &sp = src.mPath;
+			const VDStringW &vp = var.mPath;
+			if (vp.size() > sp.size()
+				&& wcsncmp(vp.c_str(), sp.c_str(), sp.size()) == 0
+				&& (vp[sp.size()] == L'/' || vp[sp.size()] == L'\\'))
+				return true;
+		}
+	}
+
+	return false;
 }
 
 void ATGameLibrary::ClearHistory() {
@@ -1257,6 +1619,7 @@ void ATGameLibrary::LoadSettingsFromRegistry() {
 	mSettings.mListSize = key.getInt("ListSize", 0);
 	if (mSettings.mListSize < 0 || mSettings.mListSize > 2)
 		mSettings.mListSize = 0;
+	mSettings.mbShowDetailsPanel = key.getBool("ShowDetailsPanel", true);
 
 	int sourceCount = key.getInt("SourceCount", 0);
 	mSources.clear();
@@ -1291,6 +1654,7 @@ void ATGameLibrary::SaveSettingsToRegistry() const {
 	key.setInt("ViewMode", mSettings.mViewMode);
 	key.setInt("GridSize", mSettings.mGridSize);
 	key.setInt("ListSize", mSettings.mListSize);
+	key.setBool("ShowDetailsPanel", mSettings.mbShowDetailsPanel);
 
 	key.setInt("SourceCount", (int)mSources.size());
 	for (int i = 0; i < (int)mSources.size(); ++i) {
@@ -1304,6 +1668,25 @@ void ATGameLibrary::SaveSettingsToRegistry() const {
 		key.setString(pathKey.c_str(), mSources[i].mPath.c_str());
 		key.setBool(archKey.c_str(), mSources[i].mbIsArchive);
 		key.setBool(fileKey.c_str(), mSources[i].mbIsFile);
+	}
+
+	// Delete the tail left behind when the list shrinks.  SourceCount is
+	// what the loader honours, so stale Source<N>.* keys were harmless —
+	// but they accumulate forever and keep the full path of a source the
+	// user removed sitting in their settings file, which is not something
+	// "remove" should leave behind.  Stop at the first index with nothing
+	// to delete: the keys are always written as a dense run.
+	for (int i = (int)mSources.size(); ; ++i) {
+		VDStringA pathKey, archKey, fileKey;
+		pathKey.sprintf("Source%d.Path", i);
+		archKey.sprintf("Source%d.IsArchive", i);
+		fileKey.sprintf("Source%d.IsFile", i);
+
+		bool any = key.removeValue(pathKey.c_str());
+		any |= key.removeValue(archKey.c_str());
+		any |= key.removeValue(fileKey.c_str());
+		if (!any)
+			break;
 	}
 }
 
@@ -1869,13 +2252,33 @@ void ATGameLibrary::MergePlayHistory(std::vector<GameEntry> &newEntries,
 	}
 
 	for (auto &entry : newEntries) {
+		// Assume new until a prior entry claims it.  This is what tells
+		// the auto-fetch which games actually just turned up, rather
+		// than it having to re-derive "missing metadata" every scan and
+		// re-attempt the same permanent misses forever.
+		entry.mbNewlyAdded = true;
+
 		for (const auto &var : entry.mVariants) {
 			std::wstring key(var.mPath.c_str(), var.mPath.size());
 			auto it = pathToOld.find(key);
 			if (it != pathToOld.end()) {
+				entry.mbNewlyAdded = false;
 				const auto &old = oldEntries[it->second];
 				entry.mLastPlayed = old.mLastPlayed;
 				entry.mPlayCount = old.mPlayCount;
+				// Online metadata and downloaded media survive a
+				// rescan.  The scanner cannot rediscover any of it —
+				// the media lives under media/, which is not a scanned
+				// source — so without this a rescan would silently
+				// wipe every download.  Same reasoning as the
+				// custom_art/ carry-over below.
+				entry.mMeta = old.mMeta;
+				// A pending automatic-fetch request survives the rescan
+				// too.  AddBootedGame inserts an entry and immediately
+				// rescans, so the scan's replacement lands before the
+				// fetch pump has had a chance to act; without this the
+				// request is lost every single time.
+				entry.mbNewlyAdded = old.mbNewlyAdded;
 				// Preserve user-set art (stored under custom_art/)
 				// across rescans — MatchArt never rediscovers it
 				// because the custom_art dir isn't a scanned source.

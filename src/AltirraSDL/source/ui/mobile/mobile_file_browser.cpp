@@ -987,10 +987,11 @@ void RenderFileBrowser(ATSimulator &sim, ATUIState &uiState,
 					VDStringA pathU8 = VDTextWToU8(VDStringW(entry.fullPath));
 					ATUIPushDeferred(kATDeferred_BootImage, pathU8.c_str());
 					mobileState.gameLoaded = true;
-					// Record this as the "currently playing" variant and,
-					// when the user has opted in, add the file/archive to
-					// the library + Last Played list.
-					GameBrowser_OnBootedGame(entry.fullPath);
+					// Library registration (currently-playing marker, play
+					// history, auto-add) is handled centrally when the
+					// deferred boot completes — see ui_main.cpp.  Doing it
+					// here as well would double-count the play, and would
+					// add files that then failed to load.
 					// Close the browser and drop back to the emulator so
 					// the user lands directly on the booted game (they can
 					// still reopen the library via the menu button).

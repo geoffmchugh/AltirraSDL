@@ -172,6 +172,31 @@ LRESULT ATMainWindow::WndProc2(UINT msg, WPARAM wParam, LPARAM lParam) {
 			ATSaveSettings(kATSettingsCategory_FullScreen);
 			break;
 
+		case WM_QUERYENDSESSION:
+			if (!ATUICloseActiveModals())
+				return FALSE;
+
+			if (!ATUIConfirmDiscardAll((VDGUIHandle)mhwnd,
+				L"Windows is shutting down",
+				L"Are you sure you want to exit?"))
+			{
+				return FALSE;
+			}
+
+			// WM_CLOSE normally saves these before fullscreen is torn down,
+			// but Windows session shutdown does not send WM_CLOSE.
+			ATSavePaneLayout(nullptr);
+			ATSaveSettings(kATSettingsCategory_FullScreen);
+			return TRUE;
+
+		case WM_ENDSESSION:
+			if (wParam) {
+				// Leave the normal main-loop teardown in charge of saving all
+				// remaining settings and releasing emulator resources.
+				PostQuitMessage(0);
+			}
+			return 0;
+
 		case WM_DESTROY:
 			ATUIUnregisterTopLevelWindow(mhwnd);
 			ATUIDestroyModelessWindows(mhwnd);

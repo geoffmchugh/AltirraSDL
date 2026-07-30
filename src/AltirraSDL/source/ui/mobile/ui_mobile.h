@@ -21,6 +21,7 @@ enum class ATMobileUIScreen {
 	About,           // Full-screen About panel
 	DiskManager,     // Full-screen Disk Drive manager
 	GameBrowser,     // Full-screen Game Library browser
+	GameDetails,     // Full-screen per-game details sheet
 	SetupWizard      // Full-screen First Time Setup wizard (gaming-mode renderer)
 };
 

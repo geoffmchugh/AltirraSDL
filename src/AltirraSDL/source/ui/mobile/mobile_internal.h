@@ -12,6 +12,7 @@
 #include <cwctype>
 #include <vector>
 #include <functional>
+#include <imgui.h>            // ImVec2 in the preview-panel signatures
 #include <vd2/system/VDString.h>
 
 #include "ui_mobile.h"
@@ -129,6 +130,7 @@ enum class ATMobileSettingsPage {
 	SaveState,
 	Firmware,
 	GameLibrary,
+	Metadata,
 	OnlinePlay,
 	Advanced,    // Settings storage + Reset Altirra (destructive)
 };
@@ -247,6 +249,77 @@ int GameBrowser_GetVariantCount(int entryIdx);
 // already-running drive.
 void GameBrowser_ShowVariantPickerForSwap(int entryIdx,
 	std::function<void(const VDStringW &)> onPick);
+// Open the variant picker in normal boot mode.  Used by the Game
+// Details sheet, which closes itself first and hands control back to
+// the browser so the picker renders over its usual backdrop.
+void GameBrowser_ShowVariantPickerForBoot(int entryIdx);
+// Boot a specific entry/variant through the browser's own launch path
+// (play-count recording, picker-mode hand-off, resume sequencing).
+void GameBrowser_LaunchEntry(ATSimulator &sim, ATMobileUIState &mobileState,
+	size_t entryIndex, int variantIndex);
+
+// Game Details sheet (mobile_game_details.cpp)
+void RenderGameDetails(ATSimulator &sim, ATUIState &uiState,
+	ATMobileUIState &mobileState, SDL_Window *window);
+void GameDetails_Open(int entryIndex);
+void GameDetails_Close();
+int  GameDetails_GetEntry();
+
+// ---------------------------------------------------------------------
+// Docked game preview panel (mobile_game_preview.cpp)
+//
+// The always-visible companion to the tile grid: whichever game is
+// currently highlighted, shown with its artwork, facts and synopsis.
+// Where it docks is purely a function of the space available, because
+// the same panel has to work on a 21:9 handheld in landscape and on a
+// 4:3 tablet held upright:
+//
+//   Side    - to the right of the grid, when the body is wide.
+//   Bottom  - under the grid, when the body is tall.  A wide, short
+//             panel, so its content lays out horizontally instead.
+//   None    - phone-sized screens, where either dock would leave too
+//             little grid to browse.  Long-press falls back to the
+//             full-screen details sheet there.
+// ---------------------------------------------------------------------
+enum class ATGamePreviewDock {
+	None,
+	Side,
+	Bottom,
+};
+
+// `enabled` is the user's GameLibrarySettings.mbShowDetailsPanel.
+ATGamePreviewDock GamePreview_ComputeDock(float bodyW, float bodyH,
+	bool enabled);
+float GamePreview_SideWidth(float bodyW);
+float GamePreview_BottomHeight(float bodyH);
+
+// Draw the panel into a child window of exactly `size`.  Draws nothing
+// (but still consumes the space) when `entryIndex` is out of range.
+//
+// The child is created with ImGuiWindowFlags_NoNav on purpose: the panel
+// is a *display*, and letting D-pad focus wander into it would break the
+// grid's spatial navigation — pressing Right on the last column would
+// land on a button instead of doing nothing.  Its two actions stay fully
+// clickable with mouse and touch; gamepad users reach the same actions
+// (and more) with Y, which opens the full details sheet.
+void GamePreview_Render(ATSimulator &sim, ATMobileUIState &mobileState,
+	int entryIndex, ATGamePreviewDock dock, const ImVec2 &size);
+
+// The "[<]  Screenshot  [>]" artwork switch, drawn `width` wide at the
+// current cursor.  Shared by the docked preview panel and the
+// full-screen details sheet so the two present the same control.
+//
+// It drives the GLOBAL preference (ATMetadataSettings::mArtSlot), not
+// anything per-game — pressing it re-renders the whole library.
+struct GameEntry;
+void ATMobileDrawArtSwitch(const GameEntry &entry, float width);
+
+// Metadata settings page (mobile_settings_metadata.cpp)
+void RenderSettingsPage_Metadata(ATMobileUIState &mobileState);
+// True while one of that page's option pickers is on screen.  The
+// settings screen's Back handler stands down when it is, so a single
+// Back press closes the picker instead of also popping the page.
+bool ATMobileMetadataPickerOpen();
 // Render the variant picker if currently open.  Safe no-op when
 // closed.  Called from the top-level screen dispatcher so the swap-
 // mode picker (opened from the Disk Drives screen) still renders

@@ -1722,8 +1722,22 @@ void ATUIDialogSysConfigEnhancedText::OnResizeVirtualScreen() {
 	}
 
 	if (1 != swscanf(heightStr.c_str(), L" %u%lc", &height, &dummy)) {
+		FailValidation(mVSHeightView.GetWindowId());
+		SignalFailedValidation(mVSHeightView.GetWindowId());
+		return;
+	}
+
+	// SetVirtualScreenSize() clamps to the hardware-supported range. Reject
+	// out-of-range input here instead of silently accepting a different size.
+	if (width < 40 || width > 255) {
 		FailValidation(mVSWidthView.GetWindowId());
 		SignalFailedValidation(mVSWidthView.GetWindowId());
+		return;
+	}
+
+	if (height < 24 || height > 255) {
+		FailValidation(mVSHeightView.GetWindowId());
+		SignalFailedValidation(mVSHeightView.GetWindowId());
 		return;
 	}
 
@@ -3073,16 +3087,69 @@ void ATUIDialogSysConfigDisplay2::OnDataExchange(bool write) {
 			g_ATOptions.mbFullScreenBorderless = false;
 			 
 			if (IsButtonChecked(IDC_FSMODE_CUSTOM)) {
-				VDStringW s;
-				VDStringW t;
+				VDStringW widthText;
+				VDStringW heightText;
+				VDStringW refreshText;
+				unsigned width = 0;
+				unsigned height = 0;
+				unsigned refresh = 0;
 
-				if (GetControlText(IDC_FSMODE_WIDTH, s) && GetControlText(IDC_FSMODE_HEIGHT, t)) {
-					g_ATOptions.mFullScreenWidth = wcstoul(s.c_str(), NULL, 10);
-					g_ATOptions.mFullScreenHeight = wcstoul(t.c_str(), NULL, 10);
+				const auto parseModeValue = [](const VDStringW& text,
+					unsigned& value, bool allowEmpty)
+				{
+					const wchar_t *s = text.c_str();
+					while (iswspace(*s))
+						++s;
 
-					if (GetControlText(IDC_FSMODE_REFRESH, s))
-						g_ATOptions.mFullScreenRefreshRate = wcstoul(s.c_str(), NULL, 10);
+					if (!*s)
+						return allowEmpty ? (value = 0, true) : false;
+
+					// wcstoull accepts a leading minus sign, which is not
+					// meaningful for a display mode.
+					if (*s < L'0' || *s > L'9')
+						return false;
+
+					wchar_t *end = nullptr;
+					const unsigned long long n = wcstoull(s, &end, 10);
+					while (iswspace(*end))
+						++end;
+
+					if (*end || n > 0xFFFFFFFFULL)
+						return false;
+
+					value = (unsigned)n;
+					return true;
+				};
+
+				if (!GetControlText(IDC_FSMODE_WIDTH, widthText)
+					|| !parseModeValue(widthText, width, false)
+					|| !width)
+				{
+					FailValidation(IDC_FSMODE_WIDTH);
+					SignalFailedValidation(IDC_FSMODE_WIDTH);
+					return;
 				}
+
+				if (!GetControlText(IDC_FSMODE_HEIGHT, heightText)
+					|| !parseModeValue(heightText, height, false)
+					|| !height)
+				{
+					FailValidation(IDC_FSMODE_HEIGHT);
+					SignalFailedValidation(IDC_FSMODE_HEIGHT);
+					return;
+				}
+
+				if (!GetControlText(IDC_FSMODE_REFRESH, refreshText)
+					|| !parseModeValue(refreshText, refresh, true))
+				{
+					FailValidation(IDC_FSMODE_REFRESH);
+					SignalFailedValidation(IDC_FSMODE_REFRESH);
+					return;
+				}
+
+				g_ATOptions.mFullScreenWidth = width;
+				g_ATOptions.mFullScreenHeight = height;
+				g_ATOptions.mFullScreenRefreshRate = refresh;
 			}
 		}
 
@@ -3096,7 +3163,15 @@ void ATUIDialogSysConfigDisplay2::OnDataExchange(bool write) {
 		if (GetControlText(IDC_PATH, path))
 			g_ATUIManager.SetCustomEffectPath(path.c_str(), false);
 	} else {
-		if (g_ATOptions.mFullScreenWidth && g_ATOptions.mFullScreenHeight) {
+		if (g_ATOptions.mbFullScreenBorderless) {
+			CheckButton(IDC_FSMODE_DESKTOP, false);
+			CheckButton(IDC_FSMODE_CUSTOM, false);
+			CheckButton(IDC_FSMODE_BORDERLESS, true);
+
+			SetControlText(IDC_FSMODE_WIDTH, L"");
+			SetControlText(IDC_FSMODE_HEIGHT, L"");
+			SetControlText(IDC_FSMODE_REFRESH, L"");
+		} else if (g_ATOptions.mFullScreenWidth && g_ATOptions.mFullScreenHeight) {
 			CheckButton(IDC_FSMODE_DESKTOP, false);
 			CheckButton(IDC_FSMODE_CUSTOM, true);
 			CheckButton(IDC_FSMODE_BORDERLESS, false);
@@ -3104,8 +3179,8 @@ void ATUIDialogSysConfigDisplay2::OnDataExchange(bool write) {
 			SetControlTextF(IDC_FSMODE_HEIGHT, L"%u", g_ATOptions.mFullScreenHeight);
 			SetControlTextF(IDC_FSMODE_REFRESH, L"%u", g_ATOptions.mFullScreenRefreshRate);
 		} else {
-			CheckButton(IDC_FSMODE_DESKTOP, !g_ATOptions.mbFullScreenBorderless);
-			CheckButton(IDC_FSMODE_BORDERLESS, g_ATOptions.mbFullScreenBorderless);
+			CheckButton(IDC_FSMODE_DESKTOP, true);
+			CheckButton(IDC_FSMODE_BORDERLESS, false);
 			CheckButton(IDC_FSMODE_CUSTOM, false);
 
 			SetControlText(IDC_FSMODE_WIDTH, L"");
@@ -3614,6 +3689,7 @@ void ATUIDialogSysConfigCaption::OnDataExchange(bool write) {
 		--mUpdateInterlock;
 
 		UpdateEnables();
+		OnTemplateChanged();
 	}
 }
 
@@ -3622,6 +3698,9 @@ void ATUIDialogSysConfigCaption::UpdateEnables() {
 }
 
 void ATUIDialogSysConfigCaption::OnCustomChanged() {
+	if (mUpdateInterlock)
+		return;
+
 	if (mCustomView.GetChecked()) {
 		if (mTemplateView.GetCaption().empty())
 			mTemplateView.SetCaption(VDTextAToW(ATUIGetDefaultWindowCaptionTemplate()).c_str());
@@ -3633,6 +3712,9 @@ void ATUIDialogSysConfigCaption::OnCustomChanged() {
 }
 
 void ATUIDialogSysConfigCaption::OnTemplateChanged() {
+	if (mUpdateInterlock)
+		return;
+
 	VDStringW captionText;
 
 	vdrefptr<IATUIWindowCaptionUpdater> updater;

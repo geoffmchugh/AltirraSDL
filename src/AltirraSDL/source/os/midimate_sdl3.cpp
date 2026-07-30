@@ -60,9 +60,19 @@ namespace {
 			mPort = snd_seq_create_simple_port(mSeq, "MidiMate Out",
 				SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ,
 				SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+
+			if (mPort >= 0 && snd_midi_event_new(3, &mParser) == 0) {
+				snd_midi_event_init(mParser);
+				snd_midi_event_no_status(mParser, 1);
+			}
 		}
 
 		~ATMidiSink() {
+			if (mParser) {
+				snd_midi_event_free(mParser);
+				mParser = nullptr;
+			}
+
 			if (mSeq) {
 				snd_seq_close(mSeq);
 				mSeq = nullptr;
@@ -70,14 +80,10 @@ namespace {
 		}
 
 		void SendShort(uint32 packed) {
-			if (!mSeq || mPort < 0)
+			if (!mSeq || mPort < 0 || !mParser)
 				return;
 
-			snd_midi_event_t *parser = nullptr;
-			if (snd_midi_event_new(3, &parser) != 0)
-				return;
-			snd_midi_event_init(parser);
-			snd_midi_event_no_status(parser, 1);
+			snd_midi_event_reset_encode(mParser);
 
 			snd_seq_event_t ev {};
 			snd_seq_ev_set_source(&ev, mPort);
@@ -106,13 +112,11 @@ namespace {
 			}
 
 			for (size_t i = 0; i < len; ++i) {
-				if (snd_midi_event_encode_byte(parser, bytes[i], &ev) == 1)
+				if (snd_midi_event_encode_byte(mParser, bytes[i], &ev) == 1)
 					break;
 			}
 			snd_seq_event_output_direct(mSeq, &ev);
 			snd_seq_drain_output(mSeq);
-
-			snd_midi_event_free(parser);
 		}
 
 		void Reset() {
@@ -128,6 +132,7 @@ namespace {
 
 	private:
 		snd_seq_t *mSeq = nullptr;
+		snd_midi_event_t *mParser = nullptr;
 		int mPort = -1;
 	};
 

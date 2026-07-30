@@ -694,17 +694,20 @@ uintptr_t LookupArtByGameName(const char *gameName, int *outW, int *outH) {
 
 	const auto& entries = lib->GetEntries();
 	for (const auto& e : entries) {
-		if (e.mArtPath.empty()) continue;
+		// Resolve through the library so downloaded metadata art is
+		// eligible here too, not just scanner-matched images.
+		const VDStringW artPath = lib->GetTileArtPath(e);
+		if (artPath.empty()) continue;
 		// First try the precomputed canonical name.  When that's empty
 		// (older cache entries), fall back to the display name + any
 		// variant basename so we don't miss legitimate matches.
 		std::wstring cand = CanonicalBasename(e.mCanonicalName.c_str());
 		if (cand == key) {
-			return (uintptr_t)cache->GetTexture(e.mArtPath, outW, outH);
+			return (uintptr_t)cache->GetTexture(artPath, outW, outH);
 		}
 		cand = CanonicalBasename(e.mDisplayName.c_str());
 		if (cand == key) {
-			return (uintptr_t)cache->GetTexture(e.mArtPath, outW, outH);
+			return (uintptr_t)cache->GetTexture(artPath, outW, outH);
 		}
 		for (const auto& v : e.mVariants) {
 			const wchar_t *p = v.mPath.c_str();
@@ -713,7 +716,7 @@ uintptr_t LookupArtByGameName(const char *gameName, int *outW, int *outH) {
 				if (*q == L'/' || *q == L'\\') slash = q;
 			const wchar_t *base = slash ? slash + 1 : p;
 			if (CanonicalBasename(base) == key) {
-				return (uintptr_t)cache->GetTexture(e.mArtPath, outW, outH);
+				return (uintptr_t)cache->GetTexture(artPath, outW, outH);
 			}
 		}
 	}

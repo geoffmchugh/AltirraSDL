@@ -37,6 +37,13 @@ public:
 	// Drop all cached textures (e.g. on display backend change).
 	void Clear();
 
+	// Forget one image: drops the GPU texture AND deletes its scaled
+	// disk thumbnail.  Needed when the bytes behind a path change but
+	// the path does not — re-downloading a cover writes over the same
+	// file name, and without this the stale thumbnail would keep being
+	// served forever.  Main thread only.
+	void Invalidate(const VDStringW &artPath);
+
 private:
 	enum class EntryState {
 		Empty,

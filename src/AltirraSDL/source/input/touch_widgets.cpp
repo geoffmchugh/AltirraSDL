@@ -258,6 +258,14 @@ bool ATTouchToggle(const char *label, bool *value) {
 
 	bool hovered, held;
 	bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+
+	// A flick-scroll starts as a press on whatever row is under the
+	// finger.  ATTouchButton and ATTouchListItem already veto the press
+	// in that case; without the same veto here, swiping through a
+	// settings page would silently flip whichever toggle the gesture
+	// started on.
+	if (pressed && ATTouchIsDraggingBeyondSlop())
+		pressed = false;
 	if (pressed) *value = !*value;
 
 	bool focused = ImGui::IsItemFocused();

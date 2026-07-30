@@ -74,3 +74,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+
+# ScreenScraper developer credential for local builds.
+# Read by src/AltirraSDL/tools/gen_ss_devkey.py when the environment
+# does not supply one.  NEVER commit this.
+/localconfig/screenscraper.env

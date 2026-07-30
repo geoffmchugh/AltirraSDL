@@ -37,6 +37,11 @@
 #include <at/atcore/serializable.h>
 
 #include "ui_main.h"
+#include "ui/dialogs/ui_game_metadata.h"
+#include "ui/gamelibrary/game_library.h"
+
+extern ATGameLibrary *GetGameLibrary();
+extern void GameBrowser_OnBootedGame(const VDStringW &variantPath);
 #include "ui_autosuggest.h"
 #include "../../app/disk_state.h"  // ATResolveDiskMount / Canonical
 #include "ui/emotes/emote_netplay.h"
@@ -432,6 +437,23 @@ void ATUIPollDeferredActions() {
 
 				if (loadSuccess) {
 					ATAddMRU(a.path.c_str());
+
+					// Register the boot with the Game Library: record it
+					// as the currently-playing file, bump its play
+					// history, and — when the user has opted in — add it
+					// to the library.
+					//
+					// Here rather than at each call site.  It used to be
+					// invoked from exactly one place, the Gaming Mode file
+					// browser, which meant "Add booted games to library
+					// automatically" quietly did nothing for Desktop's
+					// Boot Image, the command line, drag-and-drop or the
+					// MRU list.  This is the one point every boot passes
+					// through, and it runs only after the load actually
+					// succeeded, so a file that failed to load no longer
+					// gets an entry.
+					if (a.type == kATDeferred_BootImage && !a.path.empty())
+						GameBrowser_OnBootedGame(a.path);
 
 					// Save state loads suppress cold reset (matches Windows)
 					if (ctx.mLoadType == kATImageType_SaveState || ctx.mLoadType == kATImageType_SaveState2)
@@ -2333,6 +2355,24 @@ void ATUIRenderFrame(ATSimulator &sim, VDVideoDisplaySDL3 &display,
 	// list above the overlay, the emulator canvas, and any modal —
 	// and, critically, remain visible after the Online Play overlay
 	// closes (e.g. "session ended — your previous game was restored").
+	//
+	// The metadata pump runs immediately before, so a run that finished
+	// this frame is reported this frame.  It lives here rather than in
+	// the Game Browser because the user may have started the download
+	// from the details sheet and then navigated away, and the answer has
+	// to find them wherever they went.  It is called in both UI modes:
+	// Gaming Mode turns it into a toast, Desktop reads the same text
+	// back out in the Game Library's progress strip.
+	ATUIMetadataPumpRunFeedback();
+	// Same once-per-frame slot: pick up games that have just appeared in
+	// the library and fetch their metadata if the user left that on.
+	if (ATGameLibrary *autoLib = GetGameLibrary()) {
+		// Apply finished results first, so a fetch started from the
+		// details sheet shows up on that sheet the moment it lands
+		// rather than when the user next visits the browser.
+		ATUIMetadataPumpResults(*autoLib);
+		ATUIMetadataPumpAutoFetch(*autoLib);
+	}
 	ATTouchRenderToasts();
 
 	ImGui::Render();

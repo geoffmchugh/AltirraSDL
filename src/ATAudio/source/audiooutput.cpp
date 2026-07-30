@@ -340,7 +340,7 @@ protected:
 	uint32	mRepeatInc = 0;
 
 	uint32	mCheckCounter = 0;
-	uint32	mMinLevel = 0;
+	uint32	mMinLevel = 0xFFFFFFFFU;
 	uint32	mMaxLevel = 0;
 	uint32	mUnderflowCount = 0;
 	uint32	mOverflowCount = 0;
@@ -973,7 +973,7 @@ void ATAudioOutput::InternalWriteAudio(
 		mAudioStatus.mbStereoMixing = mbFilterStereo;
 		mAudioStatus.mSamplingRate = mSamplingRate;
 
-		mMinLevel = 0xFFFFFFFU;
+		mMinLevel = 0xFFFFFFFFU;
 		mMaxLevel = 0;
 		mUnderflowCount = 0;
 		mOverflowCount = 0;

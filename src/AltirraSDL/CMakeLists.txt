@@ -67,9 +67,13 @@ target_sources(AltirraSDL PRIVATE
     source/input/touch_controls.cpp
     source/input/touch_widgets.cpp
 
-    # --- media/ : video recording, accelerator table ---
+    # --- media/ : video recording, accelerator table, online metadata ---
     source/media/videowriter_sdl3.cpp
     source/media/accel_sdl3.cpp
+    source/media/http_client.cpp
+    source/media/metadata_settings.cpp
+    source/media/metadata_screenscraper.cpp
+    source/media/metadata_scraper.cpp
     ${CMAKE_SOURCE_DIR}/src/Altirra/source/aviwriter.cpp
 
     # --- ui/core/ : ImGui hub, main render, indicators ---
@@ -126,6 +130,7 @@ target_sources(AltirraSDL PRIVATE
     # --- ui/dialogs/ : standalone single-purpose dialogs ---
     source/ui/dialogs/ui_disk.cpp
     source/ui/dialogs/ui_game_library.cpp
+    source/ui/dialogs/ui_game_metadata.cpp
     source/ui/dialogs/ui_cassette.cpp
     source/ui/dialogs/ui_cartmapper.cpp
     source/ui/dialogs/ui_cheater.cpp
@@ -198,6 +203,9 @@ target_sources(AltirraSDL PRIVATE
     source/ui/mobile/mobile_settings_firmware.cpp
     source/ui/mobile/mobile_gamepad.cpp
     source/ui/mobile/mobile_game_browser.cpp
+    source/ui/mobile/mobile_game_details.cpp
+    source/ui/mobile/mobile_game_preview.cpp
+    source/ui/mobile/mobile_settings_metadata.cpp
 
     # --- ui/gamelibrary/ : Game Library (data model, scanner, cache) ---
     source/ui/gamelibrary/game_library.cpp
@@ -665,6 +673,61 @@ endif()
 # The script uses Python stdlib only (json, struct).
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# ---------------------------------------------------------------------------
+# ScreenScraper developer key
+# ---------------------------------------------------------------------------
+# Resolved by a script that reads the ENVIRONMENT (ALTIRRA_SS_DEVID /
+# ALTIRRA_SS_DEVPASSWORD) or, failing that, the gitignored local file
+# localconfig/screenscraper.env.  The value never reaches CMake, so it
+# cannot leak into CMakeCache.txt, compile_commands.json, the process
+# list, or a build log -- CMake only learns whether a key is present.
+#
+# The script runs BOTH at configure time (for the status message) and
+# before every build (so creating or editing the credential file and
+# running a plain `cmake --build` takes effect).  It rewrites the header
+# only when the contents actually change, so this does not trigger
+# needless rebuilds, and it is silent on the per-build path unless
+# something changed.
+#
+# CI NOTE: because the key is resolved per build, workflows must expose
+# the secrets to the BUILD step as well as the configure step -- put them
+# in the job-level `env:` block rather than on a single step.
+#
+# No key configured is a normal, fully supported build: the metadata
+# feature reports "not configured" and offers the user an Advanced field
+# for their own credential.  That is what every contributor, fork PR and
+# distribution packager gets.  See src/AltirraSDL/tools/gen_ss_devkey.py.
+set(SSKEY_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+set(SSKEY_GEN_H ${SSKEY_GEN_DIR}/screenscraper_devkey.h)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ss_devkey.py
+            --out ${SSKEY_GEN_H}
+    RESULT_VARIABLE SSKEY_RESULT
+    OUTPUT_VARIABLE SSKEY_OUTPUT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT SSKEY_RESULT EQUAL 0)
+    message(FATAL_ERROR "gen_ss_devkey.py failed: ${SSKEY_OUTPUT}")
+endif()
+message(STATUS "${SSKEY_OUTPUT}")
+
+# Re-resolve before every build.  CMAKE_CONFIGURE_DEPENDS alone is not
+# enough: it does not fire for a file that did not exist when CMake last
+# ran, which is exactly the "I just created screenscraper.env" case.
+add_custom_target(altirra_ss_devkey
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ss_devkey.py
+            --out ${SSKEY_GEN_H}
+            --quiet-if-unchanged
+    BYPRODUCTS ${SSKEY_GEN_H}
+    COMMENT "Resolving ScreenScraper developer key"
+    VERBATIM
+)
+add_dependencies(AltirraSDL altirra_ss_devkey)
+
+target_include_directories(AltirraSDL PRIVATE ${SSKEY_GEN_DIR})
+
 set(KEYBOARD_ASSETS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/assets/keyboard)
 set(KEYBOARD_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(KEYBOARD_GEN_H ${KEYBOARD_GEN_DIR}/keyboard_data.h)
@@ -1103,6 +1166,18 @@ if(APPLE)
     # compiler; see altirra_add_objcxx_source() defined earlier in this file.
     altirra_add_objcxx_source(source/ui/menus/macos_menubar.mm)
     altirra_add_objcxx_source(source/os/midimate_coremidi.mm)
+endif()
+
+# HTTPS backend for the Game Library metadata scraper
+# (source/media/http_client.cpp).  Windows uses WinHTTP from the Windows
+# SDK; Android goes through JNI (no extra library); Linux/macOS dlopen()
+# the host's libcurl at runtime rather than linking it, so nothing is
+# added here beyond the dl shim that dlopen itself needs on older glibc
+# (CMAKE_DL_LIBS is empty on platforms where dlopen lives in libc).
+if(WIN32)
+    target_link_libraries(AltirraSDL PRIVATE winhttp)
+elseif(NOT ALTIRRA_WASM)
+    target_link_libraries(AltirraSDL PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 # Platform compile definitions (match what the top-level sets globally, but

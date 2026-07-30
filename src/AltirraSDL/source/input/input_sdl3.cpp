@@ -37,6 +37,7 @@
 #include <unordered_map>
 #include <SDL3/SDL.h>
 #include <at/ataudio/pokey.h>
+#include <at/atui/constants.h>
 #include "inputmanager.h"
 #include "inputmap.h"
 #include "inputdefs.h"
@@ -147,8 +148,8 @@ static uint32 SDLScancodeToInputCode(SDL_Scancode sc) {
 	case SDL_SCANCODE_F12: return kATInputCode_KeyF12;
 
 	// Special
-	case SDL_SCANCODE_PAUSE:    return 0x13;  // VK_PAUSE
-	case SDL_SCANCODE_CAPSLOCK: return 0x14;  // VK_CAPITAL
+	case SDL_SCANCODE_PAUSE:    return kATUIVK_Pause;
+	case SDL_SCANCODE_CAPSLOCK: return kATUIVK_CapsLock;
 
 	// Numpad
 	case SDL_SCANCODE_KP_0: return kATInputCode_KeyNumpad0;

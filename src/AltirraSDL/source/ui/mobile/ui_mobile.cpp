@@ -1008,6 +1008,10 @@ void ATMobileUI_Render(ATSimulator &sim, ATUIState &uiState,
 		RenderGameBrowser(sim, uiState, mobileState, window);
 		break;
 
+	case ATMobileUIScreen::GameDetails:
+		RenderGameDetails(sim, uiState, mobileState, window);
+		break;
+
 	case ATMobileUIScreen::SetupWizard:
 		RenderMobileSetupWizard(sim, uiState, mobileState, window);
 		break;

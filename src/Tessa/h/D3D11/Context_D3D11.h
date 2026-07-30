@@ -637,7 +637,7 @@ public:
 	uint32 GetDeviceLossCounter() const override;
 	void Present() override;
 
-	void SetGpuPriority(int priority) override {}
+	void SetGpuPriority(int priority) override;
 
 public:
 	void BeginScope(uint32 color, const char *message) override;
