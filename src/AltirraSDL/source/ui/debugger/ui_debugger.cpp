@@ -102,6 +102,8 @@ namespace {
 		float clipH = 0;
 		int srcW = 0;
 		int srcH = 0;
+		float framebufferScaleX = 1;
+		float framebufferScaleY = 1;
 	};
 
 	std::vector<PaneEntry> g_debugPanes;
@@ -247,8 +249,22 @@ static void RenderDisplayPaneFrameCallback(const ImDrawList *, const ImDrawCmd *
 	if (!data || !data->backend)
 		return;
 
-	data->backend->RenderFrameClipped(data->x, data->y, data->w, data->h,
-		data->srcW, data->srcH, data->clipX, data->clipY, data->clipW, data->clipH);
+	// ImGui window/draw-list coordinates are logical window coordinates,
+	// while both rendering backends operate in framebuffer pixels. This
+	// distinction matters on Retina/HiDPI displays, where passing logical
+	// coordinates caused the emulator draw and scissor to cover unrelated
+	// debugger panes.
+	data->backend->RenderFrameClipped(
+		data->x * data->framebufferScaleX,
+		data->y * data->framebufferScaleY,
+		data->w * data->framebufferScaleX,
+		data->h * data->framebufferScaleY,
+		data->srcW,
+		data->srcH,
+		data->clipX * data->framebufferScaleX,
+		data->clipY * data->framebufferScaleY,
+		data->clipW * data->framebufferScaleX,
+		data->clipH * data->framebufferScaleY);
 }
 
 static void DrawDisplayPaneVideoWriterOverlay(
@@ -748,6 +764,11 @@ static void RenderDisplayPane() {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 	bool open = true;
 	if (ImGui::Begin("Display", &open)) {
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+			g_focusedPaneId = kATUIPaneId_Display;
+			g_activePaneId = kATUIPaneId_Display;
+		}
+
 		IDisplayBackend *backend = ATUIGetDisplayBackend();
 		if (backend && backend->HasTexture()) {
 			ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -765,6 +786,11 @@ static void RenderDisplayPane() {
 						frameRect.w - frameRect.y);
 
 					ImGui::InvisibleButton("##DisplayFrameViewport", avail);
+					if (ImGui::IsItemClicked()) {
+						ImGui::SetWindowFocus();
+						g_focusedPaneId = kATUIPaneId_Display;
+						g_activePaneId = kATUIPaneId_Display;
+					}
 
 					DisplayPaneRenderCallbackData cbData;
 					cbData.backend = backend;
@@ -778,6 +804,28 @@ static void RenderDisplayPane() {
 					cbData.clipH = avail.y;
 					cbData.srcW = backend->GetTextureWidth();
 					cbData.srcH = backend->GetTextureHeight();
+					const ImVec2 framebufferScale =
+						ImGui::GetIO().DisplayFramebufferScale;
+					cbData.framebufferScaleX = framebufferScale.x;
+					cbData.framebufferScaleY = framebufferScale.y;
+					if (backend->GetType() == DisplayBackendType::SDLRenderer) {
+						// Match ImGui_ImplSDLRenderer3: when an explicit SDL
+						// render scale is active, SDL applies it to callback
+						// coordinates and multiplying by the framebuffer scale
+						// here would double-scale the embedded display.
+						float renderScaleX = 1.0f;
+						float renderScaleY = 1.0f;
+						if (SDL_GetRenderScale(
+								backend->GetSDLRenderer(),
+								&renderScaleX,
+								&renderScaleY))
+						{
+							if (renderScaleX != 1.0f)
+								cbData.framebufferScaleX = 1.0f;
+							if (renderScaleY != 1.0f)
+								cbData.framebufferScaleY = 1.0f;
+						}
+					}
 
 					ImDrawList *drawList = ImGui::GetWindowDrawList();
 					drawList->AddCallback(RenderDisplayPaneFrameCallback, &cbData, sizeof cbData);
@@ -960,7 +1008,6 @@ void ATUIDebuggerRenderPanes(ATSimulator &sim, ATUIState &state) {
 	if (monoFont)
 		ImGui::PushFont(monoFont);
 
-	g_focusedPaneId = 0;
 	for (auto& e : g_debugPanes) {
 		e.pane->OnFrame();
 
@@ -972,7 +1019,24 @@ void ATUIDebuggerRenderPanes(ATSimulator &sim, ATUIState &state) {
 			e.pane->SetVisible(false);
 		}
 
-		if (e.pane->HasFocus()) {
+		// Pane Render() implementations sample focus immediately after
+		// Begin(). A click on a child widget changes ImGui's NavWindow later
+		// in that same Render(), so HasFocus() alone lags or can miss the
+		// transition. Resolve the final focused/active window after rendering
+		// the pane, including child windows such as multiline inputs/tables.
+		ImGuiContext& imgui = *GImGui;
+		ImGuiWindow *paneWindow = ImGui::FindWindowByName(e.pane->GetTitle());
+		auto belongsToPane = [paneWindow](ImGuiWindow *window) {
+			return paneWindow && window
+				&& (window == paneWindow
+					|| ImGui::IsWindowChildOf(
+						window, paneWindow, true, false));
+		};
+
+		if (e.pane->HasFocus()
+			|| belongsToPane(imgui.NavWindow)
+			|| belongsToPane(imgui.ActiveIdWindow))
+		{
 			g_focusedPaneId = e.id;
 			g_activePaneId = e.id;
 		}
@@ -1077,6 +1141,50 @@ uint32 ATUIDebuggerGetFocusedPaneId() {
 	return g_focusedPaneId;
 }
 
+uint32 ATUIDebuggerGetKeyboardFocusPaneId() {
+	if (!g_debuggerOpen)
+		return 0;
+
+	auto belongsToWindow = [](ImGuiWindow *window, ImGuiWindow *root) {
+		return window && root
+			&& (window == root
+				|| ImGui::IsWindowChildOf(window, root, true, false));
+	};
+
+	// The focused pane ID intentionally persists through transient no-focus
+	// frames, but must not override a menu, popup, or modal that currently
+	// owns navigation/input. ActiveIdWindow covers child widgets; NavWindow
+	// covers keyboard navigation and popup/menu focus.
+	ImGuiContext& imgui = *GImGui;
+	ImGuiWindow *focusedWindow = imgui.ActiveIdWindow
+		? imgui.ActiveIdWindow
+		: imgui.NavWindow;
+
+	if (!focusedWindow)
+		return g_focusedPaneId;
+
+	if (focusedWindow->Flags
+		& (ImGuiWindowFlags_Popup
+			| ImGuiWindowFlags_Modal
+			| ImGuiWindowFlags_ChildMenu))
+	{
+		return 0;
+	}
+
+	ImGuiWindow *displayWindow = ImGui::FindWindowByName("Display");
+	if (belongsToWindow(focusedWindow, displayWindow))
+		return kATUIPaneId_Display;
+
+	for (const PaneEntry& entry : g_debugPanes) {
+		ImGuiWindow *paneWindow =
+			ImGui::FindWindowByName(entry.pane->GetTitle());
+		if (belongsToWindow(focusedWindow, paneWindow))
+			return entry.id;
+	}
+
+	return 0;
+}
+
 void ATUIDebuggerFocusConsole() {
 	ATActivateUIPane(kATUIPaneId_Console, true, true);
 }
@@ -1088,7 +1196,7 @@ bool ATUIDebuggerHandleTextInput(const char *text) {
 	if (ImGui::GetIO().WantTextInput)
 		return false;
 
-	if (g_focusedPaneId != kATUIPaneId_Disassembly)
+	if (ATUIDebuggerGetKeyboardFocusPaneId() != kATUIPaneId_Disassembly)
 		return false;
 
 	ATUIDebuggerFocusConsoleWithText(text);

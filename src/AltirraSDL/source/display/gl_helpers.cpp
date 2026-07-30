@@ -314,11 +314,19 @@ GLuint GLCreateFBO(int w, int h, GLenum internalFormat, GLuint *outTex) {
 	return fbo;
 }
 
-void GLRenderTarget::Create(int w, int h, GLenum internalFormat) {
+bool GLRenderTarget::Create(int w, int h, GLenum internalFormat) {
 	Destroy();
+
+	if (w <= 0 || h <= 0)
+		return false;
+
+	fbo = GLCreateFBO(w, h, internalFormat, &tex);
+	if (!fbo)
+		return false;
+
 	width = w;
 	height = h;
-	fbo = GLCreateFBO(w, h, internalFormat, &tex);
+	return true;
 }
 
 void GLRenderTarget::Destroy() {

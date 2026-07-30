@@ -637,8 +637,14 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 
 	if (verb == "query_debugger_focus") {
 		const uint32 paneId = ATUIDebuggerGetFocusedPaneId();
+		const uint32 keyboardPaneId =
+			ATUIDebuggerGetKeyboardFocusPaneId();
 		std::string json = "{\"ok\":true,\"pane_id\":";
 		json += std::to_string(paneId);
+		json += ",\"keyboard_pane_id\":";
+		json += std::to_string(keyboardPaneId);
+		json += ",\"display_input\":";
+		json += keyboardPaneId == kATUIPaneId_Display ? "true" : "false";
 		json += "}";
 		return json;
 	}

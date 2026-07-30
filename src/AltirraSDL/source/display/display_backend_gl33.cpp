@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <climits>
 #include <cmath>
 #include <algorithm>
 #include <string>
@@ -224,6 +225,27 @@ void DisplayBackendGL::UploadFrame(const void *pixels, int width, int height, in
 // Frame rendering
 // ============================================================================
 
+static int SaturateDoubleToInt(double value) {
+	if (value >= (double)INT_MAX)
+		return INT_MAX;
+	if (value <= (double)INT_MIN)
+		return INT_MIN;
+	return (int)value;
+}
+
+static int CeilPositiveDoubleToInt(double value) {
+	if (value >= (double)INT_MAX)
+		return INT_MAX;
+	return std::max(1, (int)std::ceil(value));
+}
+
+static int ClampRenderDimension(float value, int limit) {
+	const double boundedValue = std::min(
+		(double)value,
+		(double)std::max(1, limit));
+	return std::max(1, (int)std::ceil(boundedValue));
+}
+
 void DisplayBackendGL::BeginFrame() {
 	SDL_GetWindowSizeInPixels(mpWindow, &mWinW, &mWinH);
 	glViewport(0, 0, mWinW, mWinH);
@@ -233,22 +255,53 @@ void DisplayBackendGL::BeginFrame() {
 void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dstH,
 	int srcW, int srcH)
 {
-	if (!mEmuTexture || srcW <= 0 || srcH <= 0)
+	if (!mEmuTexture || srcW <= 0 || srcH <= 0
+		|| !std::isfinite(dstX) || !std::isfinite(dstY)
+		|| !std::isfinite(dstW) || !std::isfinite(dstH)
+		|| dstW <= 0.0f || dstH <= 0.0f)
 		return;
 
 	// When librashader is active, redirect built-in rendering into an
 	// intermediate FBO so librashader can process the result on top.
 	bool useLibrashader = mLibrashader.HasPreset();
-	int vpW = (int)dstW;
-	int vpH = (int)dstH;
+	const int dstPixelW = CeilPositiveDoubleToInt((double)dstW);
+	const int dstPixelH = CeilPositiveDoubleToInt((double)dstH);
+
+	// Processing an image larger than the framebuffer cannot improve the
+	// visible result. More importantly, display zoom can make dstW/dstH
+	// enormous while only a window-sized portion is visible. Allocating
+	// bicubic/librashader targets at that off-screen size caused runaway
+	// GPU/unified-memory use (hundreds of GB at the maximum zoom).
+	const double processingScale = std::min({
+		1.0,
+		(double)std::max(1, mWinW) / (double)dstW,
+		(double)std::max(1, mWinH) / (double)dstH
+	});
+	const int vpW = std::clamp(
+		(int)std::ceil((double)dstW * processingScale),
+		1, std::max(1, mWinW));
+	const int vpH = std::clamp(
+		(int)std::ceil((double)dstH * processingScale),
+		1, std::max(1, mWinH));
 
 	if (useLibrashader) {
-		// Allocate/resize the intermediate FBO at destination size
+		// Allocate both targets before redirecting any rendering. If the
+		// driver rejects either allocation, retain a valid default
+		// framebuffer and fall back to the built-in renderer for this frame.
 		if (mLibrashaderFBO.width != vpW || mLibrashaderFBO.height != vpH) {
-			mLibrashaderFBO.Destroy();
-			mLibrashaderFBO.Create(vpW, vpH, GL_RGBA8);
+			if (!mLibrashaderFBO.Create(vpW, vpH, GL_RGBA8))
+				useLibrashader = false;
 		}
+		if (useLibrashader
+			&& (mLibrashaderOutFBO.width != vpW
+				|| mLibrashaderOutFBO.height != vpH))
+		{
+			if (!mLibrashaderOutFBO.Create(vpW, vpH, GL_RGBA8))
+				useLibrashader = false;
+		}
+	}
 
+	if (useLibrashader) {
 		// Redirect all subsequent rendering into the FBO.
 		// We translate the viewport so built-in effects think they're
 		// rendering at (0,0) in the FBO rather than at (dstX,dstY).
@@ -264,7 +317,9 @@ void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dst
 		// return to this FBO instead of FBO 0 (the screen).
 		mRenderTargetFBO = mLibrashaderFBO.fbo;
 
-		// Render built-in effects into the FBO at (0,0,vpW,vpH)
+		// Render the complete image into the bounded processing target.
+		// It is scaled to the requested destination during the final blit,
+		// preserving zoom and pan without allocating invisible pixels.
 		const bool savedClipEnabled = mbOutputClipEnabled;
 		const int savedClipX = mOutputClipX;
 		const int savedClipY = mOutputClipY;
@@ -272,7 +327,7 @@ void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dst
 		const int savedClipH = mOutputClipH;
 		mbOutputClipEnabled = false;
 		glDisable(GL_SCISSOR_TEST);
-		RenderFrameInner(0.0f, 0.0f, dstW, dstH, srcW, srcH);
+		RenderFrameInner(0.0f, 0.0f, (float)vpW, (float)vpH, srcW, srcH);
 		mbOutputClipEnabled = savedClipEnabled;
 		mOutputClipX = savedClipX;
 		mOutputClipY = savedClipY;
@@ -287,13 +342,6 @@ void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dst
 
 		// Now apply librashader on top: FBO texture → screen
 		++mFrameCounter;
-
-		// Allocate a second FBO for librashader output (input and output
-		// can't share the same FBO since librashader reads from a texture).
-		if (mLibrashaderOutFBO.width != vpW || mLibrashaderOutFBO.height != vpH) {
-			mLibrashaderOutFBO.Destroy();
-			mLibrashaderOutFBO.Create(vpW, vpH, GL_RGBA8);
-		}
 
 		// Our built-in shaders render top-down (Y=0 at top, SDL/ImGui
 		// convention) into mLibrashaderFBO, but librashader expects
@@ -324,14 +372,19 @@ void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dst
 		// Blit librashader output to the screen.  librashader output is
 		// in standard GL orientation (Y=0 at bottom); the screen uses
 		// SDL convention (Y=0 at top).  Flip src Y to compensate.
-		int scrX = (int)dstX;
-		int scrY = savedWinH - (int)(dstY + dstH);
+		const int scrX1 = SaturateDoubleToInt((double)dstX);
+		const int scrY1 = SaturateDoubleToInt(
+			(double)savedWinH - ((double)dstY + (double)dstPixelH));
+		const int scrX2 = SaturateDoubleToInt(
+			(double)dstX + (double)dstPixelW);
+		const int scrY2 = SaturateDoubleToInt(
+			(double)savedWinH - (double)dstY);
 		ApplyOutputClip();
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, mLibrashaderFBO.fbo);
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 		glBlitFramebuffer(
 			0, vpH, vpW, 0,                          // src: flip Y (bottom-up → top-down)
-			scrX, scrY, scrX + vpW, scrY + vpH,      // dst: screen position
+			scrX1, scrY1, scrX2, scrY2,
 			GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		ClearOutputClip();
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
@@ -357,21 +410,47 @@ bool DisplayBackendGL::SetOutputClip(float dstX, float dstY, float dstW, float d
 {
 	ClearOutputClip();
 
-	if (dstW <= 0.0f || dstH <= 0.0f || clipW <= 0.0f || clipH <= 0.0f)
+	if (!std::isfinite(dstX) || !std::isfinite(dstY)
+		|| !std::isfinite(dstW) || !std::isfinite(dstH)
+		|| !std::isfinite(clipX) || !std::isfinite(clipY)
+		|| !std::isfinite(clipW) || !std::isfinite(clipH)
+		|| dstW <= 0.0f || dstH <= 0.0f
+		|| clipW <= 0.0f || clipH <= 0.0f)
 		return false;
 
-	const float visibleL = std::max(dstX, clipX);
-	const float visibleT = std::max(dstY, clipY);
-	const float visibleR = std::min(dstX + dstW, clipX + clipW);
-	const float visibleB = std::min(dstY + dstH, clipY + clipH);
+	// Intersect in double precision and include the framebuffer bounds. This
+	// keeps all later integer conversions and scissor arithmetic bounded even
+	// when a valid finite zoom rectangle is near the limits of float.
+	const double visibleL = std::max({
+		(double)dstX,
+		(double)clipX,
+		0.0
+	});
+	const double visibleT = std::max({
+		(double)dstY,
+		(double)clipY,
+		0.0
+	});
+	const double visibleR = std::min({
+		(double)dstX + (double)dstW,
+		(double)clipX + (double)clipW,
+		(double)std::max(0, mWinW)
+	});
+	const double visibleB = std::min({
+		(double)dstY + (double)dstH,
+		(double)clipY + (double)clipH,
+		(double)std::max(0, mWinH)
+	});
 
 	if (visibleR <= visibleL || visibleB <= visibleT)
 		return false;
 
 	mOutputClipX = (int)std::floor(visibleL);
 	mOutputClipY = (int)std::floor(visibleT);
-	mOutputClipW = (int)std::ceil(visibleR) - mOutputClipX;
-	mOutputClipH = (int)std::ceil(visibleB) - mOutputClipY;
+	const int outputClipR = (int)std::ceil(visibleR);
+	const int outputClipB = (int)std::ceil(visibleB);
+	mOutputClipW = outputClipR - mOutputClipX;
+	mOutputClipH = outputClipB - mOutputClipY;
 
 	if (mOutputClipW <= 0 || mOutputClipH <= 0)
 		return false;
@@ -441,10 +520,11 @@ void DisplayBackendGL::RenderFrameInner(float dstX, float dstY, float dstW, floa
 	// Simple passthrough rendering — use glViewport for destination rect
 	// and the fullscreen triangle to fill it.
 	// GL viewport Y is bottom-up, SDL rect Y is top-down.
-	int vpX = (int)dstX;
-	int vpY = mWinH - (int)(dstY + dstH);
-	int vpW = (int)dstW;
-	int vpH = (int)dstH;
+	int vpX = SaturateDoubleToInt((double)dstX);
+	int vpY = SaturateDoubleToInt(
+		(double)mWinH - ((double)dstY + (double)dstH));
+	int vpW = std::max(1, SaturateDoubleToInt((double)dstW));
+	int vpH = std::max(1, SaturateDoubleToInt((double)dstH));
 	glViewport(vpX, vpY, vpW, vpH);
 
 	glBindVertexArray(mEmptyVAO);
@@ -719,11 +799,13 @@ void DisplayBackendGL::RenderScreenFX(float dstX, float dstY, float dstW, float 
 		// Compile PAL program on first use
 		if (!mPALProgram) {
 			// Use NoFlip VS: the PAL pre-pass writes into mPALFBO which is later
-// sampled by the screen-FX/passthrough pass using the Y-flipping VS.
-// To make that downstream flip produce the correct orientation,
-// mPALFBO must be stored in GL's native bottom-up layout (matching
-// how mEmuTexture's row 0 is the top scanline after the consumer flip).
-mPALProgram = GLCreateProgram(kGLSL_FullscreenTriangleVS_NoFlip, kGLSL_PALArtifacting_FS);
+			// sampled by the screen-FX/passthrough pass using the Y-flipping VS.
+			// To make that downstream flip produce the correct orientation,
+			// mPALFBO must be stored in GL's native bottom-up layout (matching
+			// how mEmuTexture's row 0 is the top scanline after the consumer flip).
+			mPALProgram = GLCreateProgram(
+				kGLSL_FullscreenTriangleVS_NoFlip,
+				kGLSL_PALArtifacting_FS);
 			if (mPALProgram) {
 				mPALLoc_SourceTex = glGetUniformLocation(mPALProgram, "uSourceTex");
 				mPALLoc_ChromaOffset = glGetUniformLocation(mPALProgram, "uChromaOffset");
@@ -734,77 +816,87 @@ mPALProgram = GLCreateProgram(kGLSL_FullscreenTriangleVS_NoFlip, kGLSL_PALArtifa
 		if (mPALProgram) {
 			// Create/resize PAL FBO to match emulator texture dimensions
 			if (mPALFBO.width != mTexW || mPALFBO.height != mTexH) {
-				mPALFBO.Destroy();
 				mPALFBO.Create(mTexW, mTexH, GL_RGBA8);
 			}
 
-			mPALFBO.Bind();
-			glViewport(0, 0, mTexW, mTexH);
+			if (mPALFBO.fbo) {
+				mPALFBO.Bind();
+				glViewport(0, 0, mTexW, mTexH);
 
-			glBindVertexArray(mEmptyVAO);
-			glUseProgram(mPALProgram);
+				glBindVertexArray(mEmptyVAO);
+				glUseProgram(mPALProgram);
 
-			// The D3D9 technique uses bilinear filtering for the PAL pass source.
-			// Force GL_LINEAR regardless of the current filter mode setting.
-			glActiveTexture(GL_TEXTURE0);
-			glBindTexture(GL_TEXTURE_2D, sourceTex);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				// The D3D9 technique uses bilinear filtering for the PAL pass
+				// source. Force GL_LINEAR regardless of the current filter mode.
+				glActiveTexture(GL_TEXTURE0);
+				glBindTexture(GL_TEXTURE_2D, sourceTex);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-			glUniform1i(mPALLoc_SourceTex, 0);
+				glUniform1i(mPALLoc_SourceTex, 0);
 
-			// Chroma offset: mPALBlendingOffset is in scanlines (-1 or -2).
-			// Convert to UV space by dividing by source texture height.
-			// The PAL pre-pass uses the NoFlip VS, so vUV.y now increases
-			// downward in the source (top scanline at vUV.y=0).  The original
-			// offset was authored against the Y-flipped UV convention, so
-			// negate it to preserve the same logical blending direction.
-			glUniform2f(mPALLoc_ChromaOffset,
-				0.0f, -mScreenFX.mPALBlendingOffset / (float)mTexH);
+				// Chroma offset: mPALBlendingOffset is in scanlines (-1 or -2).
+				// Convert to UV space by dividing by source texture height.
+				// The PAL pre-pass uses the NoFlip VS, so vUV.y now increases
+				// downward in the source (top scanline at vUV.y=0). The original
+				// offset was authored against the Y-flipped UV convention, so
+				// negate it to preserve the same logical blending direction.
+				glUniform2f(mPALLoc_ChromaOffset,
+					0.0f, -mScreenFX.mPALBlendingOffset / (float)mTexH);
 
-			// Signed RGB encoding flag — when the frame uses extended-range
-			// palette encoding, the shader must convert to normal [0,1] range.
-			glUniform1i(mPALLoc_SignedRGB, mScreenFX.mbSignedRGBEncoding ? 1 : 0);
+				// Signed RGB encoding flag — when the frame uses extended-range
+				// palette encoding, convert it to the normal [0,1] range.
+				glUniform1i(
+					mPALLoc_SignedRGB,
+					mScreenFX.mbSignedRGBEncoding ? 1 : 0);
 
-			GLDrawFullscreenTriangle();
+				GLDrawFullscreenTriangle();
 
-			glUseProgram(0);
-			glBindVertexArray(0);
-			glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
+				glUseProgram(0);
+				glBindVertexArray(0);
+				glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
 
-			// Restore the filter mode on the emulator texture
-			// Only Point and Bicubic use NEAREST; SharpBilinear uses LINEAR.
-			GLenum filter = (mFilterMode == kATDisplayFilterMode_Point
-				|| mFilterMode == kATDisplayFilterMode_Bicubic)
-				? GL_NEAREST : GL_LINEAR;
-			glBindTexture(GL_TEXTURE_2D, sourceTex);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+				// Restore the filter mode on the emulator texture. Only Point
+				// and Bicubic use NEAREST; SharpBilinear uses LINEAR.
+				GLenum filter = (mFilterMode == kATDisplayFilterMode_Point
+					|| mFilterMode == kATDisplayFilterMode_Bicubic)
+					? GL_NEAREST : GL_LINEAR;
+				glBindTexture(GL_TEXTURE_2D, sourceTex);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
 
-			// All subsequent passes read from the PAL-blended result
-			sourceTex = mPALFBO.tex;
+				// All subsequent passes read from the PAL-blended result.
+				sourceTex = mPALFBO.tex;
+			} else {
+				// GLCreateFBO restores framebuffer 0 on failure. Restore the
+				// caller's target so the remaining built-in passes still draw
+				// into the librashader input FBO when one is active.
+				glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
+				glViewport(0, 0, mWinW, mWinH);
+			}
 		}
 	}
 
 	// Handle bicubic (2-pass separable filter → output FBO)
 	if (mFilterMode == kATDisplayFilterMode_Bicubic) {
-		RenderBicubic(srcW, srcH, (int)dstW, (int)dstH, sourceTex);
-		if (mBicubicFBO2.tex)
+		const int processW = ClampRenderDimension(dstW, mWinW);
+		const int processH = ClampRenderDimension(dstH, mWinH);
+		if (RenderBicubic(srcW, srcH, processW, processH, sourceTex))
 			sourceTex = mBicubicFBO2.tex;
 	}
 
 	// Handle bloom (multi-pass pyramid → composited output in mBloomOutputFBO)
 	if (mScreenFX.mbBloomEnabled) {
-		RenderBloomV2(srcW, srcH, sourceTex);
-		if (mBloomOutputFBO.tex)
+		if (RenderBloomV2(srcW, srcH, sourceTex))
 			sourceTex = mBloomOutputFBO.tex;
 	}
 
 	// Set viewport to destination rect (GL Y is bottom-up, SDL Y is top-down)
-	int vpX = (int)dstX;
-	int vpY = mWinH - (int)(dstY + dstH);
-	int vpW = (int)dstW;
-	int vpH = (int)dstH;
+	int vpX = SaturateDoubleToInt((double)dstX);
+	int vpY = SaturateDoubleToInt(
+		(double)mWinH - ((double)dstY + (double)dstH));
+	int vpW = std::max(1, SaturateDoubleToInt((double)dstW));
+	int vpH = std::max(1, SaturateDoubleToInt((double)dstH));
 	glViewport(vpX, vpY, vpW, vpH);
 
 	// If no features are active but we got here (e.g., just bicubic), use passthrough
@@ -958,29 +1050,33 @@ mPALProgram = GLCreateProgram(kGLSL_FullscreenTriangleVS_NoFlip, kGLSL_PALArtifa
 // Bloom V2
 // ============================================================================
 
-void DisplayBackendGL::EnsureBloomPyramid(int baseW, int baseH) {
-	if (mBloomBaseW == baseW && mBloomBaseH == baseH)
-		return;
+bool DisplayBackendGL::EnsureBloomPyramid(int baseW, int baseH) {
+	bool valid = true;
+	if (mBloomBaseW != baseW || mBloomBaseH != baseH) {
+		// Create linear-light and output FBOs at full resolution.
+		valid = mBloomLinearFBO.Create(baseW, baseH, GL_RGBA16F);
+		valid = mBloomOutputFBO.Create(baseW, baseH, GL_RGBA8) && valid;
+
+		// Create pyramid at decreasing resolutions.
+		int w = baseW / 2;
+		int h = baseH / 2;
+		for (int i = 0; i < kBloomLevels; i++) {
+			if (w < 1) w = 1;
+			if (h < 1) h = 1;
+			valid = mBloomPyramid[i].Create(w, h, GL_RGBA16F) && valid;
+			w /= 2;
+			h /= 2;
+		}
+	}
+
+	if (!valid) {
+		mBloomBaseW = 0;
+		mBloomBaseH = 0;
+		return false;
+	}
 
 	mBloomBaseW = baseW;
 	mBloomBaseH = baseH;
-
-	// Create linear-light FBO at full resolution
-	mBloomLinearFBO.Create(baseW, baseH, GL_RGBA16F);
-
-	// Create output FBO for final composition (sRGB output)
-	mBloomOutputFBO.Create(baseW, baseH, GL_RGBA8);
-
-	// Create pyramid at decreasing resolutions
-	int w = baseW / 2;
-	int h = baseH / 2;
-	for (int i = 0; i < kBloomLevels; i++) {
-		if (w < 1) w = 1;
-		if (h < 1) h = 1;
-		mBloomPyramid[i].Create(w, h, GL_RGBA16F);
-		w /= 2;
-		h /= 2;
-	}
 
 	// Compile bloom programs if not already done
 	if (!mBloomGammaProgram) {
@@ -1026,13 +1122,19 @@ void DisplayBackendGL::EnsureBloomPyramid(int baseW, int baseH) {
 			glUseProgram(0);
 		}
 	}
+
+	return mBloomGammaProgram
+		&& mBloomDownProgram
+		&& mBloomUpProgram
+		&& mBloomFinalProgram;
 }
 
-void DisplayBackendGL::RenderBloomV2(int srcW, int srcH, GLuint sourceTex) {
-	EnsureBloomPyramid(mWinW, mWinH);
-
-	if (!mBloomGammaProgram || !mBloomDownProgram || !mBloomUpProgram || !mBloomFinalProgram)
-		return;
+bool DisplayBackendGL::RenderBloomV2(int srcW, int srcH, GLuint sourceTex) {
+	if (!EnsureBloomPyramid(mWinW, mWinH)) {
+		glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
+		glViewport(0, 0, mWinW, mWinH);
+		return false;
+	}
 
 	// Compute bloom parameters from current settings
 	VDDBloomV2ControlParams cp;
@@ -1159,15 +1261,16 @@ void DisplayBackendGL::RenderBloomV2(int srcW, int srcH, GLuint sourceTex) {
 	glViewport(0, 0, mWinW, mWinH);
 	glUseProgram(0);
 	glBindVertexArray(0);
+	return true;
 }
 
 // ============================================================================
 // Bicubic filter
 // ============================================================================
 
-void DisplayBackendGL::RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLuint sourceTex) {
+bool DisplayBackendGL::RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLuint sourceTex) {
 	if (dstW <= 0 || dstH <= 0)
-		return;
+		return false;
 
 	// Compile bicubic program if not done
 	if (!mBicubicProgram) {
@@ -1186,7 +1289,7 @@ void DisplayBackendGL::RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLu
 	}
 
 	if (!mBicubicProgram)
-		return;
+		return false;
 
 	// Generate bicubic filter textures (regenerate when dimensions change)
 	if (!mBicubicFilterTexH || mBicubicFilterSrcW != srcW || mBicubicFilterDstW != dstW) {
@@ -1211,10 +1314,20 @@ void DisplayBackendGL::RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLu
 	// Ensure intermediate FBOs exist.
 	// Pass 1 (horizontal): srcW×srcH → dstW×srcH
 	// Pass 2 (vertical):   dstW×srcH → dstW×dstH
-	if (mBicubicFBO.width != dstW || mBicubicFBO.height != srcH)
-		mBicubicFBO.Create(dstW, srcH, GL_RGBA8);
-	if (mBicubicFBO2.width != dstW || mBicubicFBO2.height != dstH)
-		mBicubicFBO2.Create(dstW, dstH, GL_RGBA8);
+	if ((mBicubicFBO.width != dstW || mBicubicFBO.height != srcH)
+		&& !mBicubicFBO.Create(dstW, srcH, GL_RGBA8))
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
+		glViewport(0, 0, mWinW, mWinH);
+		return false;
+	}
+	if ((mBicubicFBO2.width != dstW || mBicubicFBO2.height != dstH)
+		&& !mBicubicFBO2.Create(dstW, dstH, GL_RGBA8))
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
+		glViewport(0, 0, mWinW, mWinH);
+		return false;
+	}
 
 	glBindVertexArray(mEmptyVAO);
 	glUseProgram(mBicubicProgram);
@@ -1256,6 +1369,7 @@ void DisplayBackendGL::RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLu
 	glViewport(0, 0, mWinW, mWinH);
 	glUseProgram(0);
 	glBindVertexArray(0);
+	return true;
 }
 
 void DisplayBackendGL::DrawFullscreen(GLuint program) {

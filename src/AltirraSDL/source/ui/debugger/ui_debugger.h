@@ -96,6 +96,7 @@ void *ATUIDebuggerGetPaneAs(uint32 paneId, uint32 iid);
 
 // Focus management
 uint32 ATUIDebuggerGetFocusedPaneId();
+uint32 ATUIDebuggerGetKeyboardFocusPaneId();
 void ATUIDebuggerFocusConsole();
 void ATUIDebuggerFocusConsoleWithText(const char *text);
 const char *ATUIDebuggerGetConsoleInputTextForTest();

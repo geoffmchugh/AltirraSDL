@@ -93,7 +93,7 @@ struct GLRenderTarget {
 	int width = 0;
 	int height = 0;
 
-	void Create(int w, int h, GLenum internalFormat);
+	bool Create(int w, int h, GLenum internalFormat);
 	void Destroy();
 	void Bind() const;
 };

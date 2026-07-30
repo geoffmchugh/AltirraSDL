@@ -41,6 +41,96 @@ class TestPauseState:
         assert emu.get_sim_state()["paused"] is False
 
 
+class TestDebuggerRunStateRendering:
+    """Verify transient execution does not blank stopped debugger snapshots."""
+
+    def test_panes_keep_content_while_running(self, emu: AltirraTestHarness):
+        debugger_state = emu.send("query_command Debug.ToggleDebugger")["state"]
+        debugger_was_open = debugger_state == "checked"
+        initially_paused = emu.get_sim_state()["paused"]
+
+        try:
+            if not debugger_was_open:
+                emu.send("run_command Debug.ToggleDebugger")
+
+            emu.pause()
+            emu.wait_frames(4)
+
+            stopped_counts = {}
+            for window in ("Memory 1", "Disassembly"):
+                response = emu.send(f"list_items {window}")
+                labels = [item.get("label", "") for item in response["items"]]
+                assert "(running)" not in labels
+                stopped_counts[window] = len(labels)
+                assert stopped_counts[window] > 1
+
+            emu.resume()
+            emu.wait_frames(4)
+
+            for window in ("Memory 1", "Disassembly"):
+                response = emu.send(f"list_items {window}")
+                labels = [item.get("label", "") for item in response["items"]]
+                assert "(running)" not in labels
+                assert len(labels) == stopped_counts[window]
+
+            emu.pause()
+            for _ in range(5):
+                emu.send("run_command Debug.StepOver")
+                for _ in range(120):
+                    emu.wait_frames(1)
+                    step_state = emu.send(
+                        "query_command Debug.StepOver"
+                    )
+                    if step_state["enabled"]:
+                        break
+                else:
+                    raise AssertionError("Step Over did not stop")
+                for window in ("Memory 1", "Disassembly"):
+                    response = emu.send(f"list_items {window}")
+                    labels = [
+                        item.get("label", "") for item in response["items"]
+                    ]
+                    assert "(running)" not in labels
+                    assert len(labels) == stopped_counts[window]
+
+            emu.resume()
+            emu.send("run_command Pane.Display")
+            emu.wait_frames(4)
+            focus = emu.send("query_debugger_focus")
+            assert focus["pane_id"] == 1
+            assert focus["keyboard_pane_id"] == 1
+            assert focus["display_input"] is True
+
+            # Menus and non-display debugger panes must take keyboard
+            # ownership even though Display remains the last active pane.
+            emu.click("##MainMenuBar", "Debug")
+            emu.wait_frames(4)
+            focus = emu.send("query_debugger_focus")
+            assert focus["keyboard_pane_id"] == 0
+            assert focus["display_input"] is False
+            console_before = emu.send("query_console_input")["text"]
+            pokey_before = emu.mem_read(0xD209, 1)
+            emu.send("send_text Z")
+            emu.wait_frames(2)
+            assert emu.send("query_console_input")["text"] == console_before
+            assert emu.mem_read(0xD209, 1) == pokey_before
+
+            emu.click("Disassembly", "##addr")
+            emu.wait_frames(4)
+            focus = emu.send("query_debugger_focus")
+            assert focus["pane_id"] == 5
+            assert focus["keyboard_pane_id"] == 5
+            assert focus["display_input"] is False
+        finally:
+            if initially_paused:
+                emu.pause()
+            else:
+                emu.resume()
+            if not debugger_was_open:
+                emu.send("run_command Debug.ToggleDebugger")
+            emu.wait_frames(2)
+
+
 class TestTurboMode:
     """Verify warp speed toggle works end-to-end."""
 

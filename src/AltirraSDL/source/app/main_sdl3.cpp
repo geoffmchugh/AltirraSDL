@@ -435,12 +435,22 @@ static void ATPersistAllForSuspend() {
 }
 
 static void HandleEvents() {
-	// Detect when ImGui starts capturing keyboard (e.g. menu opened)
-	// and release all held emulator keys to prevent stuck input.
-	bool imguiCapture = ATUIWantCaptureKeyboard();
-	if (imguiCapture && !g_prevImGuiCapture)
+	// ImGui reports keyboard capture for every focused debugger window,
+	// including the Display pane's invisible interaction surface. Match the
+	// native UI: keyboard input belongs to the emulator when Display has
+	// focus, and to the debugger when another debugger pane has focus.
+	const uint32 debuggerKeyboardPane =
+		ATUIDebuggerGetKeyboardFocusPaneId();
+	const bool routeKeyboardToEmulator = debuggerKeyboardPane
+		? debuggerKeyboardPane == kATUIPaneId_Display
+		: !ATUIWantCaptureKeyboard();
+	const bool uiOwnsKeyboard = !routeKeyboardToEmulator;
+
+	// Detect when the UI starts owning the keyboard (e.g. a menu or debugger
+	// text pane is focused) and release all held emulator keys.
+	if (uiOwnsKeyboard && !g_prevImGuiCapture)
 		ATInputSDL3_ReleaseAllKeys();
-	g_prevImGuiCapture = imguiCapture;
+	g_prevImGuiCapture = uiOwnsKeyboard;
 
 	// Release mouse capture when ImGui wants the mouse (menu/dialog open)
 	bool imguiMouseCapture = ATUIWantCaptureMouse();
@@ -604,10 +614,12 @@ static void HandleEvents() {
 				if (!gamingScreenOpen && !ev.key.repeat) {
 					handled = ATUISDLActivateAccelKey(ev.key, false, kATUIAccelContext_Global);
 
-					if (!handled && ATUIDebuggerIsOpen())
+					if (!handled
+						&& debuggerKeyboardPane
+						&& debuggerKeyboardPane != kATUIPaneId_Display)
 						handled = ATUISDLActivateAccelKey(ev.key, false, kATUIAccelContext_Debugger);
 
-					if (!handled && !ATUIWantCaptureKeyboard())
+					if (!handled && routeKeyboardToEmulator)
 						handled = ATUISDLActivateAccelKey(ev.key, false, kATUIAccelContext_Display);
 				}
 
@@ -622,14 +634,14 @@ static void HandleEvents() {
 				// focused) — Up/Down should navigate that history, not
 				// the popup.
 				if (!handled
-					&& !ATUIWantCaptureKeyboard()
+					&& routeKeyboardToEmulator
 					&& ATUIAutoSuggest::IsPopupOpen()
 					&& ATUIAutoSuggest::HandleKeyDown(ev.key))
 				{
 					handled = true;
 				}
 
-				if (!handled && !ATUIWantCaptureKeyboard())
+				if (!handled && routeKeyboardToEmulator)
 					ATInputSDL3_HandleKeyDown(ev.key);
 			}
 			break;
@@ -642,13 +654,14 @@ static void HandleEvents() {
 				&& g_mobileState.currentScreen != ATMobileUIScreen::None;
 			if (!gamingScreenOpenUp) {
 				ATUISDLActivateAccelKey(ev.key, true, kATUIAccelContext_Global);
-				if (ATUIDebuggerIsOpen())
+				if (debuggerKeyboardPane
+					&& debuggerKeyboardPane != kATUIPaneId_Display)
 					ATUISDLActivateAccelKey(ev.key, true, kATUIAccelContext_Debugger);
-				if (!ATUIWantCaptureKeyboard())
+				if (routeKeyboardToEmulator)
 					ATUISDLActivateAccelKey(ev.key, true, kATUIAccelContext_Display);
 			}
 
-			if (!ATUIWantCaptureKeyboard()) {
+			if (routeKeyboardToEmulator) {
 				// Suppress emulator key-up for keys bound in accel tables
 				// (replaces hardcoded F1/F5/F7/.../F12 list)
 				uint32 upVk = SDLScancodeToVK(ev.key.scancode);
@@ -661,7 +674,7 @@ static void HandleEvents() {
 		case SDL_EVENT_TEXT_INPUT:
 			if (ATUIDebuggerHandleTextInput(ev.text.text))
 				break;
-			if (!ATUIWantCaptureKeyboard())
+			if (routeKeyboardToEmulator)
 				ATInputSDL3_HandleTextInput(ev.text.text);
 			break;
 

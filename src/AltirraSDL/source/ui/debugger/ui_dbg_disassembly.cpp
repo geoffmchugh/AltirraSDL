@@ -326,7 +326,15 @@ void ATImGuiDisassemblyPaneImpl::OnDebuggerSystemStateUpdate(const ATDebuggerSys
 	ATImGuiDebuggerPane::OnDebuggerSystemStateUpdate(state);
 
 	if (state.mbRunning) {
-		mbNeedsRebuild = true;
+		// Keep the last stopped disassembly visible while execution runs.
+		// A step normally enters and leaves the running state within a frame
+		// or two; rebuilding here clears mLines and produces a conspicuous
+		// blank/redraw flash. Native Altirra retains the text and only removes
+		// its current-PC highlighting until the stopped update arrives.
+		for (LineInfo& line : mLines) {
+			line.mbIsPC = false;
+			line.mbIsFramePC = false;
+		}
 		return;
 	}
 

@@ -903,11 +903,30 @@ bool ATImGuiMemoryPaneImpl::Render() {
 	}
 	mbHasFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-	if (mbNeedsRebuild)
+	const bool running = mbStateValid && mLastState.mbRunning;
+
+	if (mbNeedsRebuild && !running)
 		RebuildView();
 
-	if (!mbStateValid || mLastState.mbRunning) {
-		ImGui::TextDisabled(mLastState.mbRunning ? "(running)" : "(no state)");
+	if (!mbStateValid) {
+		ImGui::TextDisabled("(no state)");
+		ImGui::End();
+		return open;
+	}
+
+	// Preserve the last stopped snapshot while a step is executing. Native
+	// Altirra does not replace the memory pane with a "(running)" placeholder,
+	// and doing so makes every single-step visibly clear and redraw the pane.
+	// Do not recalculate mVisibleRows here: the cached data size corresponds
+	// to the last stopped layout and must remain internally consistent.
+	if (running) {
+		if (mViewData.empty()) {
+			ImGui::TextDisabled("(running)");
+		} else {
+			RenderAddressBar();
+			ImGui::Separator();
+			RenderHexDump();
+		}
 		ImGui::End();
 		return open;
 	}

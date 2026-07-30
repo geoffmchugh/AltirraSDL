@@ -123,14 +123,14 @@ private:
 
 	// Render bloom V2 passes.  sourceTex is the input texture (may be
 	// the emulator texture or the PAL FBO output).
-	void RenderBloomV2(int srcW, int srcH, GLuint sourceTex);
+	bool RenderBloomV2(int srcW, int srcH, GLuint sourceTex);
 
 	// Allocate/resize bloom FBO pyramid.
-	void EnsureBloomPyramid(int baseW, int baseH);
+	bool EnsureBloomPyramid(int baseW, int baseH);
 
 	// Render bicubic filter (2-pass separable).  sourceTex is the input
 	// texture (may be the emulator texture or the PAL FBO output).
-	void RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLuint sourceTex);
+	bool RenderBicubic(int srcW, int srcH, int dstW, int dstH, GLuint sourceTex);
 
 	// Draw a fullscreen triangle with the given program, binding the VAO.
 	void DrawFullscreen(GLuint program);
