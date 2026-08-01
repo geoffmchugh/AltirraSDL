@@ -75,6 +75,8 @@ class TestDebuggerRunStateRendering:
             assert len(call_stack_labels) > 0
             emu.send("run_command Debug.ToggleDebugger")
             emu.wait_frames(2)
+            focus = emu.send("query_debugger_focus")
+            assert focus["text_input_active"] is True
 
             # Closing the debugger must release ImGui keyboard ownership.
             keyboard_codes = []
@@ -114,6 +116,7 @@ class TestDebuggerRunStateRendering:
                 else:
                     raise AssertionError("Console did not hand focus to Display")
                 assert focus["keyboard_pane_id"] == 1
+                assert focus["text_input_active"] is True
 
                 keyboard_codes = []
                 for ch in ("A", "B"):

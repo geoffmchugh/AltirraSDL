@@ -1164,6 +1164,53 @@ bool ATUIIsDarkTheme() {
 
 static bool s_usingGLBackend = false;
 
+#ifndef __ANDROID__
+static SDL_Window *s_mainTextInputWindow = nullptr;
+static SDL_Window *s_activeTextInputWindow = nullptr;
+
+static void ATUIPlatformSetImeData(ImGuiContext *,
+	ImGuiViewport *viewport,
+	ImGuiPlatformImeData *data)
+{
+	SDL_Window *targetWindow = s_mainTextInputWindow;
+
+	if (data->WantVisible && viewport->PlatformHandle) {
+		const SDL_WindowID windowId =
+			(SDL_WindowID)(intptr_t)viewport->PlatformHandle;
+		if (SDL_Window *window = SDL_GetWindowFromID(windowId))
+			targetWindow = window;
+	}
+
+	if (s_activeTextInputWindow != targetWindow) {
+		if (s_activeTextInputWindow)
+			SDL_StopTextInput(s_activeTextInputWindow);
+
+		s_activeTextInputWindow = targetWindow;
+	}
+
+	if (!targetWindow)
+		return;
+
+	if (data->WantVisible) {
+		SDL_Rect area;
+		area.x = (int)(data->InputPos.x - viewport->Pos.x);
+		area.y = (int)(data->InputPos.y - viewport->Pos.y
+			+ data->InputLineHeight);
+		area.w = 1;
+		area.h = (int)data->InputLineHeight;
+		SDL_SetTextInputArea(targetWindow, &area, 0);
+	}
+
+	// Printable emulator keys use SDL_EVENT_TEXT_INPUT so keyboard-layout,
+	// dead-key, AltGr, and IME translation stays identical to normal SDL
+	// text entry. ImGui's stock SDL3 callback stops text input when its last
+	// InputText loses focus, which otherwise leaves only raw keys such as
+	// Enter working after leaving the debugger Console.
+	if (!SDL_TextInputActive(targetWindow))
+		SDL_StartTextInput(targetWindow);
+}
+#endif
+
 bool ATUIInit(SDL_Window *window, IDisplayBackend *backend) {
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -1244,6 +1291,16 @@ bool ATUIInit(SDL_Window *window, IDisplayBackend *backend) {
 		LOG_INFO("UI", "ImGui initialized (SDL_Renderer, docking enabled)");
 	}
 
+#ifndef __ANDROID__
+	// Desktop Altirra keeps cooked text input active for the emulated
+	// keyboard even when no ImGui text widget is active. Take ownership of
+	// the IME callback so ImGui can still move the candidate window without
+	// disabling SDL_EVENT_TEXT_INPUT when focus returns to Display.
+	s_mainTextInputWindow = window;
+	s_activeTextInputWindow = window;
+	ImGui::GetPlatformIO().Platform_SetImeDataFn = ATUIPlatformSetImeData;
+#endif
+
 #ifdef ALTIRRA_NETPLAY_ENABLED
 	ATNetplayUI_Initialize(window);
 #endif
@@ -1286,6 +1343,12 @@ void ATUIShutdown() {
 	ATUIShutdownPaletteSolver();
 	ATUIStopRecording();
 	ATUIHelpShutdown();
+#ifndef __ANDROID__
+	if (s_activeTextInputWindow)
+		SDL_StopTextInput(s_activeTextInputWindow);
+	s_activeTextInputWindow = nullptr;
+	s_mainTextInputWindow = nullptr;
+#endif
 	if (s_usingGLBackend) {
 		ImGui_ImplOpenGL3_Shutdown();
 	} else {

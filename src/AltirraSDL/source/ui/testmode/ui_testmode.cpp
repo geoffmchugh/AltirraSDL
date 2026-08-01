@@ -645,6 +645,9 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 		json += std::to_string(keyboardPaneId);
 		json += ",\"display_input\":";
 		json += keyboardPaneId == kATUIPaneId_Display ? "true" : "false";
+		json += ",\"text_input_active\":";
+		json += g_pWindow && SDL_TextInputActive(g_pWindow)
+			? "true" : "false";
 		json += "}";
 		return json;
 	}
