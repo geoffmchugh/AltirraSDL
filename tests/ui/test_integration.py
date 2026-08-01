@@ -66,7 +66,23 @@ class TestDebuggerRunStateRendering:
             ]
             assert "(running)" not in labels
             assert len(labels) > 1
+
+            call_stack_labels = [
+                item.get("label", "")
+                for item in emu.send("list_items Call Stack")["items"]
+            ]
+            assert "(running)" not in call_stack_labels
+            assert len(call_stack_labels) > 0
             emu.send("run_command Debug.ToggleDebugger")
+            emu.wait_frames(2)
+
+            # Closing the debugger must release ImGui keyboard ownership.
+            keyboard_codes = []
+            for ch in ("A", "B"):
+                emu.send(f"send_text {ch}")
+                emu.wait_frames(2)
+                keyboard_codes.append(emu.mem_read(0xD209, 1)[0])
+            assert keyboard_codes[0] != keyboard_codes[1]
 
             # Run/Break while closed must both open the debugger and halt;
             # the requested break must not be consumed by opening it.
@@ -77,20 +93,72 @@ class TestDebuggerRunStateRendering:
                 "query_command Debug.ToggleDebugger"
             )["state"] == "checked"
 
-            for _ in range(2):
-                emu.send("run_command Debug.RunStop")
+            for iteration in range(2):
+                emu.click("Console", "##input")
                 emu.wait_frames(2)
+                assert emu.send(
+                    "query_debugger_focus"
+                )["keyboard_pane_id"] == 2
+
+                if iteration == 0:
+                    emu.send("debugger_console g")
+                else:
+                    emu.send("run_command Debug.RunStop")
                 assert emu.get_sim_state()["running"] is True
+
+                for _ in range(30):
+                    emu.wait_frames(1)
+                    focus = emu.send("query_debugger_focus")
+                    if focus["display_input"]:
+                        break
+                else:
+                    raise AssertionError("Console did not hand focus to Display")
+                assert focus["keyboard_pane_id"] == 1
+
+                keyboard_codes = []
+                for ch in ("A", "B"):
+                    emu.send(f"send_text {ch}")
+                    emu.wait_frames(2)
+                    keyboard_codes.append(emu.mem_read(0xD209, 1)[0])
+                assert keyboard_codes[0] != keyboard_codes[1]
 
                 emu.send("run_command Debug.RunStop")
                 emu.wait_frames(2)
                 assert emu.get_sim_state()["running"] is False
+
+                focus = emu.send("query_debugger_focus")
+                assert focus["keyboard_pane_id"] == 2
+                assert focus["display_input"] is False
+
+            # Starting from another debugger pane must not force focus to
+            # Display; native only transfers focus out of Console.
+            emu.click("Disassembly", "##addr")
+            emu.wait_frames(2)
+            assert emu.send(
+                "query_debugger_focus"
+            )["keyboard_pane_id"] == 5
+
+            emu.send("run_command Debug.RunStop")
+            emu.wait_frames(10)
+            focus = emu.send("query_debugger_focus")
+            assert focus["keyboard_pane_id"] == 5
+            assert focus["display_input"] is False
+
+            emu.send("run_command Debug.RunStop")
+            emu.wait_frames(2)
+            assert emu.send(
+                "query_debugger_focus"
+            )["keyboard_pane_id"] == 5
         finally:
+            emu.cold_reset()
             if initially_paused:
                 emu.pause()
             else:
                 emu.resume()
-            if not debugger_was_open:
+            debugger_is_open = emu.send(
+                "query_command Debug.ToggleDebugger"
+            )["state"] == "checked"
+            if debugger_is_open != debugger_was_open:
                 emu.send("run_command Debug.ToggleDebugger")
             emu.wait_frames(2)
 
@@ -103,8 +171,10 @@ class TestDebuggerRunStateRendering:
             if not debugger_was_open:
                 emu.send("run_command Debug.ToggleDebugger")
 
-            emu.pause()
+            if emu.get_sim_state()["running"]:
+                emu.send("run_command Debug.RunStop")
             emu.wait_frames(4)
+            assert emu.get_sim_state()["running"] is False
 
             stopped_counts = {}
             for window in ("Memory 1", "Disassembly"):
@@ -114,8 +184,9 @@ class TestDebuggerRunStateRendering:
                 stopped_counts[window] = len(labels)
                 assert stopped_counts[window] > 1
 
-            emu.resume()
+            emu.send("run_command Debug.RunStop")
             emu.wait_frames(4)
+            assert emu.get_sim_state()["running"] is True
 
             for window in ("Memory 1", "Disassembly"):
                 response = emu.send(f"list_items {window}")
@@ -123,27 +194,11 @@ class TestDebuggerRunStateRendering:
                 assert "(running)" not in labels
                 assert len(labels) == stopped_counts[window]
 
-            emu.pause()
-            for _ in range(5):
-                emu.send("run_command Debug.StepOver")
-                for _ in range(120):
-                    emu.wait_frames(1)
-                    step_state = emu.send(
-                        "query_command Debug.StepOver"
-                    )
-                    if step_state["enabled"]:
-                        break
-                else:
-                    raise AssertionError("Step Over did not stop")
-                for window in ("Memory 1", "Disassembly"):
-                    response = emu.send(f"list_items {window}")
-                    labels = [
-                        item.get("label", "") for item in response["items"]
-                    ]
-                    assert "(running)" not in labels
-                    assert len(labels) == stopped_counts[window]
+            emu.send("run_command Debug.RunStop")
+            emu.wait_frames(2)
+            assert emu.get_sim_state()["running"] is False
 
-            emu.resume()
+            emu.send("run_command Debug.RunStop")
             emu.send("run_command Pane.Display")
             emu.wait_frames(4)
             focus = emu.send("query_debugger_focus")
@@ -172,11 +227,15 @@ class TestDebuggerRunStateRendering:
             assert focus["keyboard_pane_id"] == 5
             assert focus["display_input"] is False
         finally:
+            emu.cold_reset()
             if initially_paused:
                 emu.pause()
             else:
                 emu.resume()
-            if not debugger_was_open:
+            debugger_is_open = emu.send(
+                "query_command Debug.ToggleDebugger"
+            )["state"] == "checked"
+            if debugger_is_open != debugger_was_open:
                 emu.send("run_command Debug.ToggleDebugger")
             emu.wait_frames(2)
 

@@ -1127,6 +1127,11 @@ void ATUIDebuggerClose() {
 	g_debuggerOpen = false;
 	g_focusedPaneId = 0;
 	g_activePaneId = 0;
+
+	// Native ATCloseConsole() restores and focuses the non-debugger Display.
+	// The SDL non-debugger display is not an ImGui window, so release ImGui
+	// focus instead of focusing the now-hidden debugger Display window.
+	ImGui::SetWindowFocus(nullptr);
 }
 
 bool ATUIDebuggerIsOpen() {

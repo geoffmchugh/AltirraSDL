@@ -84,7 +84,9 @@ private:
 	char mInputBuf[512] = {};
 	bool mbFocusInput = true;
 	bool mbFirstRender = true;
-	bool mbRunning = false;       // tracks simulator run state for input disabling
+	bool mbRunning = false;		// current simulator run state
+	bool mbInputDisabled = false;	// delayed visible/editable state, matching Win32
+	uint64 mDisableInputAt = 0;	// SDL tick when a sustained run disables input
 	int mScrollFrames = 0;         // >0 = request scroll-to-bottom for N frames
 	std::string mRenderSnapshot;  // text copied under lock, rendered without lock
 
@@ -111,7 +113,7 @@ ATImGuiConsolePaneImpl::ATImGuiConsolePaneImpl()
 	if (dbg) {
 		dbg->OnPromptChanged() += mDelPromptChanged.Bind(this, &ATImGuiConsolePaneImpl::OnPromptChanged);
 		dbg->OnRunStateChanged() += mDelRunStateChanged.Bind(this, &ATImGuiConsolePaneImpl::OnRunStateChanged);
-		mbRunning = dbg->IsRunning();
+		OnRunStateChanged(dbg, dbg->IsRunning());
 	}
 }
 
@@ -162,15 +164,49 @@ void ATImGuiConsolePaneImpl::OnPromptChanged(IATDebugger *target, const char *pr
 }
 
 void ATImGuiConsolePaneImpl::OnRunStateChanged(IATDebugger *target, bool running) {
+	if (mbRunning == running)
+		return;
+
 	mbRunning = running;
-	if (!running) {
-		// Debugger just broke — auto-focus the console input
-		mbFocusInput = true;
+
+	if (running) {
+		// Native Altirra waits 100ms before making the command edit read-only.
+		// This prevents a single step, which normally stops again immediately,
+		// from moving focus to Display and then back to Console.
+		mDisableInputAt = SDL_GetTicks() + 100;
+	} else {
+		mDisableInputAt = 0;
+
+		if (mbInputDisabled) {
+			mbInputDisabled = false;
+
+			// Native only returns focus to the command edit if Display received
+			// it when the sustained run began. Do not steal focus from another
+			// debugger pane selected while execution was running.
+			if (ATUIDebuggerGetKeyboardFocusPaneId() == kATUIPaneId_Display)
+				mbFocusInput = true;
+		}
 	}
 }
 
 bool ATImGuiConsolePaneImpl::Render() {
 	bool open = true;
+	bool focusDisplayAfterRender = false;
+
+	if (mbRunning
+		&& !mbInputDisabled
+		&& mDisableInputAt
+		&& SDL_GetTicks() >= mDisableInputAt)
+	{
+		mDisableInputAt = 0;
+		mbInputDisabled = true;
+		mbFocusInput = false;
+
+		// Match the native console timer: only hand focus to Display when
+		// focus is currently somewhere inside Console.
+		focusDisplayAfterRender =
+			ATUIDebuggerGetKeyboardFocusPaneId() == kATUIPaneId_Console;
+	}
 
 	if (mbFocusRequested) {
 		ImGui::SetNextWindowFocus();
@@ -181,6 +217,8 @@ bool ATImGuiConsolePaneImpl::Render() {
 	if (!ImGui::Begin(mTitle.c_str(), &open)) {
 		mbHasFocus = false;
 		ImGui::End();
+		if (focusDisplayAfterRender)
+			ATUIDebuggerFocusDisplay();
 		return open;
 	}
 	mbHasFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -273,7 +311,7 @@ bool ATImGuiConsolePaneImpl::Render() {
 	ImGui::SameLine();
 
 	// Disable input when simulator is running (matches Windows behavior)
-	if (mbRunning)
+	if (mbInputDisabled)
 		ImGui::BeginDisabled();
 
 	ImGuiInputTextFlags inputFlags = ImGuiInputTextFlags_EnterReturnsTrue
@@ -300,7 +338,7 @@ bool ATImGuiConsolePaneImpl::Render() {
 	}
 	ImGui::PopItemWidth();
 
-	if (mbRunning)
+	if (mbInputDisabled)
 		ImGui::EndDisabled();
 
 	// Auto-focus input on first render or after break
@@ -313,6 +351,10 @@ bool ATImGuiConsolePaneImpl::Render() {
 	}
 
 	ImGui::End();
+
+	if (focusDisplayAfterRender)
+		ATUIDebuggerFocusDisplay();
+
 	return open;
 }
 

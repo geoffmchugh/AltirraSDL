@@ -52,8 +52,11 @@ ATImGuiCallStackPaneImpl::ATImGuiCallStackPaneImpl()
 void ATImGuiCallStackPaneImpl::OnDebuggerSystemStateUpdate(const ATDebuggerSystemState& state) {
 	ATImGuiDebuggerPane::OnDebuggerSystemStateUpdate(state);
 	mFrameExtPC = state.mFrameExtPC;
-	if (!state.mbRunning)
-		mbNeedsRebuild = true;
+
+	// Native ATCallStackWindow rebuilds for both running and stopped state
+	// updates. This supplies an initial snapshot when the debugger is opened
+	// over a running game and preserves it until the next debugger update.
+	mbNeedsRebuild = true;
 }
 
 void ATImGuiCallStackPaneImpl::RebuildStack() {
@@ -61,7 +64,7 @@ void ATImGuiCallStackPaneImpl::RebuildStack() {
 	mFrames.clear();
 
 	IATDebugger *dbg = ATGetDebugger();
-	if (!dbg || !mbStateValid || mLastState.mbRunning)
+	if (!dbg || !mbStateValid)
 		return;
 
 	ATCallStackFrame rawFrames[16];
@@ -121,10 +124,7 @@ bool ATImGuiCallStackPaneImpl::Render() {
 		RebuildStack();
 
 	if (mFrames.empty()) {
-		if (mbStateValid && mLastState.mbRunning)
-			ImGui::TextDisabled("(running)");
-		else
-			ImGui::TextDisabled("(no call stack)");
+		ImGui::TextDisabled("(no call stack)");
 		ImGui::End();
 		return open;
 	}
