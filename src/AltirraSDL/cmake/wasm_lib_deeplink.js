@@ -1003,26 +1003,49 @@
       }
 
       function doFetch(reasonLabel) {
-        return fetch(url, { cache: 'no-cache' })
-          .then(function (r) {
-            // Compact status-only message — the outer .catch logs the
-            // full URL alongside, so duplicating it here would just
-            // produce "... at URL — HTTP 404 for URL".
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            var freshETag = r.headers.get('etag');
-            return r.arrayBuffer().then(function (buf) {
-              writeFile(buf, freshETag);
-              if (reasonLabel === 'refetch') refetched++; else fetched++;
+        var maxAttempts = 3;
+
+        function fetchAttempt(attempt) {
+          return fetch(url, { cache: 'no-cache' })
+            .then(function (r) {
+              // Compact status-only message — the outer .catch logs the
+              // full URL alongside, so duplicating it here would just
+              // produce "... at URL — HTTP 404 for URL".
+              if (!r.ok) {
+                var httpError = new Error('HTTP ' + r.status);
+                httpError.httpStatus = r.status;
+                throw httpError;
+              }
+              var freshETag = r.headers.get('etag');
+              return r.arrayBuffer().then(function (buf) {
+                writeFile(buf, freshETag);
+                if (reasonLabel === 'refetch') refetched++; else fetched++;
+              });
+            }).catch(function (err) {
+              var status = err && err.httpStatus;
+              var retryable = !status || status === 408 || status === 425
+                || status === 429 || status >= 500;
+              if (retryable && attempt < maxAttempts) {
+                var delay = attempt === 1 ? 400 : 1200;
+                log('fetch attempt ' + attempt + ' failed for', e.rel,
+                    '— retrying in ' + delay + 'ms:',
+                    err && err.message ? err.message : err);
+                return new Promise(function (resolve) {
+                  setTimeout(resolve, delay);
+                }).then(function () { return fetchAttempt(attempt + 1); });
+              }
+
+              // Include the full URL — when self-hosters report "fetch
+              // failed", the actual URL the browser tried is the single
+              // most useful debug breadcrumb (404 from the wrong path is
+              // the #1 cause; HTTP status alone doesn't pinpoint that).
+              log('fetch failed for', e.rel, 'at', url, '—',
+                  err && err.message ? err.message : err);
+              throw err;
             });
-          })
-          .catch(function (err) {
-            // Include the full URL — when self-hosters report "fetch
-            // failed", the actual URL the browser tried is the single
-            // most useful debug breadcrumb (404 from the wrong path is
-            // the #1 cause; HTTP status alone doesn't pinpoint that).
-            log('fetch failed for', e.rel, 'at', url, '—',
-                err && err.message ? err.message : err);
-          });
+        }
+
+        return fetchAttempt(1);
       }
 
       if (onDiskSize <= 0) {
@@ -1085,7 +1108,32 @@
     }));
 
     var totalCount = entries.length + fwEntries.length;
-    Promise.all(promises).then(function () {
+    Promise.all(promises.map(function (promise, index) {
+      return promise.then(function () { return null; }, function (err) {
+        var allEntries = entries.concat(fwEntries);
+        return {
+          path: allEntries[index].rel,
+          message: err && err.message ? err.message : String(err),
+        };
+      });
+    })).then(function (failures) {
+      failures = failures.filter(function (failure) { return failure; });
+      if (failures.length) {
+        log('startup blocked: ' + failures.length
+            + ' requested file(s) could not be downloaded');
+        if (typeof Module.onLibraryFetchError === 'function') {
+          try { Module.onLibraryFetchError(failures); } catch (e) {
+            log('onLibraryFetchError failed —',
+                e && e.message ? e.message : e);
+          }
+        }
+        // Deliberately retain the run dependency.  Starting with CLI
+        // paths that do not exist drops an empty Atari into Self Test,
+        // which hides the actual download error from the user.  The
+        // error UI offers a reload that retries the complete startup.
+        return;
+      }
+
       log('lib+firmware: ' + fetched + ' fetched + ' + refetched
           + ' refetched + ' + cached + ' cached / ' + totalCount
           + ' file(s)'

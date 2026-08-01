@@ -508,6 +508,41 @@
       padding: 0 16px;
     }
 
+    #library-fetch-error {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(8, 10, 14, .92);
+      color: #f5f7fa;
+      text-align: center;
+    }
+    #library-fetch-error.active { display: flex; }
+    #library-fetch-error .error-card { max-width: 520px; }
+    #library-fetch-error .error-title {
+      margin-bottom: 10px;
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+    #library-fetch-error .error-detail {
+      margin-bottom: 18px;
+      color: #c9ced8;
+      overflow-wrap: anywhere;
+    }
+    #library-fetch-retry {
+      padding: 9px 18px;
+      border: 1px solid #7aa2f7;
+      border-radius: 5px;
+      background: #315a9f;
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+    }
+
     /* ── Log panel ───────────────────────────────────────────────── */
     #log {
       flex: 0 0 auto;
@@ -1530,6 +1565,18 @@
          aria-label="Click to start the emulator">
       <div class="play-ring" aria-hidden="true"></div>
       <div class="play-label">Click to play</div>
+    </div>
+    <div id="library-fetch-error" role="alertdialog" aria-modal="true"
+         aria-labelledby="library-fetch-error-title">
+      <div class="error-card">
+        <div class="error-title" id="library-fetch-error-title">
+          Game download failed
+        </div>
+        <div class="error-detail" id="library-fetch-error-detail">
+          Check your connection and try again.
+        </div>
+        <button id="library-fetch-retry" type="button">Retry download</button>
+      </div>
     </div>
   </div>
 
@@ -7209,6 +7256,22 @@
       arguments: __wasmCliArgs,
       print:    (t) => appendLog('[stdout] ' + t),
       printErr: (t) => appendLog('[stderr] ' + t),
+      onLibraryFetchError: (failures) => {
+        const overlay = document.getElementById('library-fetch-error');
+        const detail = document.getElementById('library-fetch-error-detail');
+        const retry = document.getElementById('library-fetch-retry');
+        const names = (failures || []).map((failure) => failure.path);
+        if (detail) {
+          detail.textContent = names.length
+            ? 'Could not download ' + names.join(', ')
+              + '. Check your connection and try again.'
+            : 'Check your connection and try again.';
+        }
+        if (retry) retry.onclick = () => window.location.reload();
+        if (overlay) overlay.classList.add('active');
+        if (retry) retry.focus();
+        statusEl.textContent = 'Game download failed';
+      },
       // Emscripten calls setStatus with messages like "Downloading
       // data... (1234567/10485760)" while the .wasm is still in flight.
       // Rewrite the prefix so non-technical users see what's actually
