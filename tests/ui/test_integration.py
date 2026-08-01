@@ -44,6 +44,56 @@ class TestPauseState:
 class TestDebuggerRunStateRendering:
     """Verify transient execution does not blank stopped debugger snapshots."""
 
+    def test_run_break_toggles_repeatedly(self, emu: AltirraTestHarness):
+        """Run/Break must not lose the requested action when opening debugger."""
+        debugger_state = emu.send("query_command Debug.ToggleDebugger")["state"]
+        debugger_was_open = debugger_state == "checked"
+        initially_paused = emu.get_sim_state()["paused"]
+
+        try:
+            if debugger_was_open:
+                emu.send("run_command Debug.ToggleDebugger")
+
+            emu.resume()
+
+            # Opening the debugger over a running game must take an initial
+            # memory snapshot instead of displaying a "(running)" sentinel.
+            emu.send("run_command Debug.ToggleDebugger")
+            emu.wait_frames(2)
+            labels = [
+                item.get("label", "")
+                for item in emu.send("list_items Memory 1")["items"]
+            ]
+            assert "(running)" not in labels
+            assert len(labels) > 1
+            emu.send("run_command Debug.ToggleDebugger")
+
+            # Run/Break while closed must both open the debugger and halt;
+            # the requested break must not be consumed by opening it.
+            emu.send("run_command Debug.RunStop")
+            emu.wait_frames(2)
+            assert emu.get_sim_state()["running"] is False
+            assert emu.send(
+                "query_command Debug.ToggleDebugger"
+            )["state"] == "checked"
+
+            for _ in range(2):
+                emu.send("run_command Debug.RunStop")
+                emu.wait_frames(2)
+                assert emu.get_sim_state()["running"] is True
+
+                emu.send("run_command Debug.RunStop")
+                emu.wait_frames(2)
+                assert emu.get_sim_state()["running"] is False
+        finally:
+            if initially_paused:
+                emu.pause()
+            else:
+                emu.resume()
+            if not debugger_was_open:
+                emu.send("run_command Debug.ToggleDebugger")
+            emu.wait_frames(2)
+
     def test_panes_keep_content_while_running(self, emu: AltirraTestHarness):
         debugger_state = emu.send("query_command Debug.ToggleDebugger")["state"]
         debugger_was_open = debugger_state == "checked"

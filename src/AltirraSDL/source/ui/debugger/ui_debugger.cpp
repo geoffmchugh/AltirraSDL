@@ -1228,11 +1228,6 @@ void ATUIDebuggerRun() {
 	if (!dbg)
 		return;
 
-	if (!dbg->IsEnabled()) {
-		ATUIDebuggerOpen();
-		return;
-	}
-
 	if (dbg->IsRunning() || dbg->AreCommandsQueued())
 		return;
 
@@ -1248,15 +1243,10 @@ void ATUIDebuggerRunStop() {
 	IATDebugger *dbg = ATGetDebugger();
 	if (!dbg) return;
 
-	if (!dbg->IsEnabled()) {
-		ATUIDebuggerOpen();
-		return;
-	}
-
 	// Match Windows cmddebug.cpp OnCommandDebugRunStop:
 	// break if running OR if commands are still queued
 	if (dbg->IsRunning() || dbg->AreCommandsQueued()) {
-		ATOpenConsole();  // no-op if already open, but ensures console exists
+		ATOpenConsole();
 		dbg->Break();
 	} else {
 		dbg->Run(GetDebugSrcMode());
@@ -1268,11 +1258,9 @@ void ATUIDebuggerBreak() {
 	if (!dbg)
 		return;
 
-	if (!dbg->IsEnabled()) {
-		ATUIDebuggerOpen();
-		return;
-	}
-
+	// Native OnCommandDebugBreak opens the debugger and still performs the
+	// requested break; opening it must not consume the first invocation.
+	ATOpenConsole();
 	dbg->Break();
 }
 

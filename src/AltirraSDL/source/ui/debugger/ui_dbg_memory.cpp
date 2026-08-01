@@ -112,8 +112,11 @@ void ATImGuiMemoryPaneImpl::OnDebuggerSystemStateUpdate(const ATDebuggerSystemSt
 		mLastCycle = state.mCycle;
 	}
 
-	if (!state.mbRunning)
-		mbNeedsRebuild = true;
+	// Native ATMemoryWindow::OnDebuggerSystemStateUpdate() calls RemakeView()
+	// for both run states. This is particularly important when the debugger
+	// is opened while the simulator is already running: there is no previous
+	// stopped snapshot to preserve yet.
+	mbNeedsRebuild = true;
 }
 
 void ATImGuiMemoryPaneImpl::OnDebuggerEvent(ATDebugEvent eventId) {
@@ -130,7 +133,7 @@ void ATImGuiMemoryPaneImpl::RebuildView() {
 
 	LOG_INFO("Debugger", "visRows=%u cols=%u dataSize=%zu", mVisibleRows, mColumns, mViewData.size());
 
-	if (!mbStateValid || !mLastState.mpDebugTarget || mLastState.mbRunning)
+	if (!mbStateValid || !mLastState.mpDebugTarget)
 		return;
 
 	IATDebugTarget *target = mLastState.mpDebugTarget;
@@ -903,30 +906,8 @@ bool ATImGuiMemoryPaneImpl::Render() {
 	}
 	mbHasFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-	const bool running = mbStateValid && mLastState.mbRunning;
-
-	if (mbNeedsRebuild && !running)
-		RebuildView();
-
 	if (!mbStateValid) {
 		ImGui::TextDisabled("(no state)");
-		ImGui::End();
-		return open;
-	}
-
-	// Preserve the last stopped snapshot while a step is executing. Native
-	// Altirra does not replace the memory pane with a "(running)" placeholder,
-	// and doing so makes every single-step visibly clear and redraw the pane.
-	// Do not recalculate mVisibleRows here: the cached data size corresponds
-	// to the last stopped layout and must remain internally consistent.
-	if (running) {
-		if (mViewData.empty()) {
-			ImGui::TextDisabled("(running)");
-		} else {
-			RenderAddressBar();
-			ImGui::Separator();
-			RenderHexDump();
-		}
 		ImGui::End();
 		return open;
 	}
