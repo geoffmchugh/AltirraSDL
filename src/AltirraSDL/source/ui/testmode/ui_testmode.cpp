@@ -2507,7 +2507,11 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 		if (command.empty())
 			return JsonError("usage: debugger_console <command>");
 
-		ATConsoleExecuteCommand(command.c_str(), false);
+		try {
+			ATConsoleExecuteCommand(command.c_str(), false);
+		} catch (const MyError& e) {
+			return JsonError(e.c_str());
+		}
 		return JsonOk();
 	}
 

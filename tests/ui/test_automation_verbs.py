@@ -120,6 +120,17 @@ class TestMemRead:
             emu.send("mem_read")
 
 
+class TestDebuggerConsole:
+    """Invalid direct debugger commands must not terminate test mode."""
+
+    def test_command_error_is_reported_and_process_survives(
+            self, emu: AltirraTestHarness):
+        with pytest.raises(CommandError, match="Value out of range"):
+            emu.send("debugger_console e 0600 1234")
+
+        assert emu.ping()["ok"] is True
+
+
 @pytest.mark.usefixtures("booted")
 class TestJoystickInput:
     """input joy drives PIA/GTIA state exactly as a physical stick could."""

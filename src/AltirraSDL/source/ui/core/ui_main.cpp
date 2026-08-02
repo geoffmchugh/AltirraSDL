@@ -1199,6 +1199,13 @@ static void ATUIPlatformSetImeData(ImGuiContext *,
 		area.w = 1;
 		area.h = (int)data->InputLineHeight;
 		SDL_SetTextInputArea(targetWindow, &area, 0);
+	} else {
+		// SDL_StopTextInput() used to cancel composition as a side effect.
+		// Since desktop text input must remain active for the emulator,
+		// explicitly dismiss any unfinished UI composition and discard its
+		// stale candidate-window position when the ImGui field loses focus.
+		SDL_ClearComposition(targetWindow);
+		SDL_SetTextInputArea(targetWindow, nullptr, 0);
 	}
 
 	// Printable emulator keys use SDL_EVENT_TEXT_INPUT so keyboard-layout,
@@ -1296,9 +1303,14 @@ bool ATUIInit(SDL_Window *window, IDisplayBackend *backend) {
 	// keyboard even when no ImGui text widget is active. Take ownership of
 	// the IME callback so ImGui can still move the candidate window without
 	// disabling SDL_EVENT_TEXT_INPUT when focus returns to Display.
+	// Android is intentionally excluded: persistent text input there can
+	// show or re-show the system keyboard at startup and after rotation. Its
+	// ABC virtual-keyboard control explicitly owns SDL text-input state.
 	s_mainTextInputWindow = window;
 	s_activeTextInputWindow = window;
 	ImGui::GetPlatformIO().Platform_SetImeDataFn = ATUIPlatformSetImeData;
+	if (!SDL_StartTextInput(window))
+		LOG_WARN("UI", "SDL_StartTextInput failed: %s", SDL_GetError());
 #endif
 
 #ifdef ALTIRRA_NETPLAY_ENABLED
