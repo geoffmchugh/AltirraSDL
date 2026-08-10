@@ -72,19 +72,41 @@ private:
 	std::optional<bool> ParseBool() const;
 
 	void ProcessCmdBackspace();
+	void ProcessCmdCharacterSelect();
+	void ProcessCmdCopyROMChars();
+	void ProcessCmdDefineCharacters();
 	void ProcessCmdExpanded();
+	void ProcessCmdFormFeed();
 	void ProcessCmdGraphics(uint8 mode);
 	void ProcessCmdGraphics();
 	void ProcessCmdGraphics9Pin();
+	void ProcessCmdHorizontalTab();
 	void ProcessCmdIntlChars();
 	void ProcessCmdLeftMargin();
 	void ProcessCmdLineSpacingCoarse();
 	void ProcessCmdLineSpacingFine();
 	void ProcessCmdMasterSelect();
 	void ProcessCmdProportional();
+	void ProcessCmdRedefineAlternateGraphicsCode();
 	void ProcessCmdReverseFeed();
 	void ProcessCmdRightMargin();
+	void ProcessCmdSelectIntlCharSet();
+	void ProcessCmdSelectPrintSpeed();
+	void ProcessCmdSelectVerticalTabChannel();
+	void ProcessCmdSetFormLength();
+	void ProcessCmdSetFormLengthInches();
+	void ProcessCmdSetFormLength(sint32 units);
+	void ProcessCmdSetHorizontalTabs();
+	void ProcessCmdSetHorizontalTabsNext();
+	void ProcessCmdSetVerticalTabs();
+	void ProcessCmdSetVerticalTabChannel();
+	void ProcessCmdSetVerticalTabChannelNext();
+	void ProcessCmdSkipOverPerforationOn();
+	void ProcessCmdSkipOverPerforationOff();
 	void ProcessCmdSuperSubScript();
+	void ProcessCmdUnderlineMode();
+	void ProcessCmdUnidirectionalMode();
+	void ProcessCmdVerticalTab();
 
 	void UpdateActiveState();
 
@@ -120,16 +142,19 @@ private:
 	// Default line spacing is 1/6"
 	static constexpr sint32 kDefaultLineSpacingUnits = 36;
 
-	uint32 mLeftMarginUnits = 0;
-	uint32 mRightMarginUnits = 0;
+	sint32 mLeftMarginUnits = 0;
+	sint32 mRightMarginUnits = 0;
 	sint32 mLineSpacingUnits = 0;
+	sint32 mFormHeightUnits = 1;
+	sint32 mPerforationSkipDistance = 0;
 
 	// ESC KLYZ modes
 	uint8 mRedefinableGraphicsModes[4] {};
 
-	uint32 mXPos = 0;
+	sint32 mXPos = 0;
+	sint32 mYPos = 0;
 	uint32 mBufferedCharCount = 0;
-	uint32 mPrintXPos = 0;
+	sint32 mPrintXPos = 0;
 
 	using PendingCommandFn = void (ATDevicePrinterFX80::*)();
 
@@ -155,6 +180,9 @@ private:
 	// Enables $80-9F and $FF. If this is disabled, bit 7 is ignored when
 	// testing for control characters.
 	bool mbItalicIntlCharsEnabled = false;
+	uint8 mIntlCharMode = 0;
+
+	bool mbUserCharsEnabled = false;
 
 	bool mbAutoLF = false;
 	bool mbSlashedZero = false;
@@ -191,6 +219,8 @@ private:
 	bool mbSuperscript = false;
 	bool mbSubscript = false;
 
+	bool mbSlowPrintSpeed = false;
+
 	sint32 mGraphicsXStep = 0;
 	uint32 mGraphicsBytesLeft = 0;
 	uint32 mGraphicsLastPins = 0;
@@ -198,6 +228,15 @@ private:
 	bool mbGraphics9Pin = false;
 	bool mbGraphicsNoAdjacentDots = false;
 	bool mbGraphicsDiscard = false;
+
+	int8 mNumCustomHTabs = -1;
+	uint8 mCustomHTabCharLast = 0;
+	uint16 mCustomHTabs[32] {};
+
+	// bitmask of vertical tab channels that have been set
+	uint8 mCustomVTabChannelsSet = 0;
+	uint8 mCustomVTabChannel = 0;
+	uint16 mCustomVTabs[8][16] {};
 
 	vdrefptr<IATPrinterGraphicalOutput> mpGraphicsOutput;
 
@@ -209,6 +248,9 @@ private:
 	// We only need a max of 160 characters in this buffer.
 	static constexpr size_t kMaxCharsBuffered = 160;
 	BufferedChar mCharBuffer[160] {};
+
+	uint16 mUserFontData[256][12] {};
+	uint8 mUserFontStartStop[256][2] {};
 };
 
 #endif

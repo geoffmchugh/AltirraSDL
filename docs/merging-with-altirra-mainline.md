@@ -286,3 +286,27 @@ instead of changing the enum-flag macros to upstream's C++23
 fork's C++20-capable build configurations. Test16's new `constexpr` on the
 operators is retained; preserve both the `constexpr` qualifiers and the local
 helper on future merges.
+
+---
+
+## Test17 local merge notes
+
+The test16 → test17 merge preserves the fork's stricter printer corrections
+where they go beyond upstream test17:
+
+- `src/Altirra/source/printerexport.cpp` keeps scalar-range and surrogate
+  validation, consistent PDF font naming/bounds, correct stream `/Length1`
+  handling, and the GCC 12-compatible non-static hash call operator. Upstream
+  test17 contains the surrogate subtraction and character-font descriptor name
+  fixes, but not the full validation set.
+- `src/Altirra/source/printer.cpp` keeps the tracked-character dot-center
+  alignment correction and explanatory merge notes. Upstream test17 now also
+  recognizes both normal and elongated 1029 spaces.
+- `src/Altirra/source/printeroutput.cpp` keeps the lowercase include spelling,
+  matching horizontal callback invocation, and left dot extent in character
+  bounds while adopting test17's top-dot print-head coordinate system.
+
+Test17 adds `ATPrinterGraphicsSpec::mBaselinePin` and uses it to position the
+Windows graphical-printer cursor. The SDL debugger mirrors that behavior in
+`src/AltirraSDL/source/ui/debugger/ui_dbg_printer.cpp`, including subtracting
+the offset when setting the print position from a click.

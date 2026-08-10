@@ -69,6 +69,10 @@ struct ATPrinterGraphicsSpec {
 
 	// Number of pins in the print head.
 	uint32 mNumPins;
+
+	// Pin number corresponding to the bottom-most dot above the text baseline.
+	// All pins below this pin are for descenders or spacing.
+	uint32 mBaselinePin;
 };
 
 // Interface for output sinks connecting to printer ports and receiving

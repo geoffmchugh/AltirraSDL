@@ -157,6 +157,7 @@ void ATDevice1025Full::Init() {
 	spec.mVerticalDotPitchMM = 0.44704f;	// 0.0176" vertical pitch
 	spec.mbBit0Top = true;
 	spec.mNumPins = 7;
+	spec.mBaselinePin = 6;
 
 	mpPrinterGraphicalOutput = GetService<IATPrinterOutputManager>()->CreatePrinterGraphicalOutput(g_ATDeviceDefPrinter1025Full.mpName, spec);
 }

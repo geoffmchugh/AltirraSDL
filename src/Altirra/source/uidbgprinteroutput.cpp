@@ -261,6 +261,7 @@ private:
 
 	float mViewCursorY = 0;
 	float mViewCursorX = 10.0f;
+	float mViewCursorYOffset = 0;
 	uint32 mPenColorLinear = 0;
 	uint32 mPenColorSrgb = 0;
 
@@ -365,6 +366,11 @@ void ATUIPrinterGraphicalOutputWindow::AttachToOutput(ATPrinterGraphicalOutput& 
 	mViewCursorX = mpOutput->GetHorizontalPos();
 	mViewCursorY = mpOutput->GetVerticalPos();
 
+	if (spec.mbBit0Top)
+		mViewCursorYOffset = spec.mVerticalDotPitchMM * (float)spec.mBaselinePin + 2.0f * spec.mDotRadiusMM;
+	else
+		mViewCursorYOffset = spec.mVerticalDotPitchMM * (float)(spec.mNumPins - 1 - spec.mBaselinePin) + 2.0f * spec.mDotRadiusMM;
+
 	mPageWidthMM = spec.mPageWidthMM;
 	mPageVBorderMM = spec.mPageVBorderMM;
 	mDotRadiusMM = spec.mDotRadiusMM;
@@ -408,7 +414,7 @@ void ATUIPrinterGraphicalOutputWindow::ResetView() {
 
 void ATUIPrinterGraphicalOutputWindow::SetPrintPosition(sint32 clientY) {
 	// convert client Y position to view Y
-	const float viewY = std::max<float>(0.0f, (float)(mViewOriginPixelY + clientY) * mViewMMPerPixel);
+	const double viewY = std::max<double>(0.0, (double)(mViewOriginPixelY + clientY) * mViewMMPerPixel - mViewCursorYOffset);
 
 	// move if different
 	if (mViewCursorY != viewY) {
@@ -1254,6 +1260,8 @@ void ATUIPrinterGraphicalOutputWindow::OnVerticalMove(double y) {
 }
 
 vdrect32 ATUIPrinterGraphicalOutputWindow::ComputeVerticalCursorArea(float y) const {
+	y += mViewCursorYOffset;
+
 	// compute metrics
 	const sint32 offsetX = (mViewDpi * 8 + 48) / 96;
 	const sint32 triW = (mViewDpi * 24 + 48) / 96;
@@ -1290,6 +1298,8 @@ void ATUIPrinterGraphicalOutputWindow::RecomputeVerticalCursorArea() {
 vdrect32 ATUIPrinterGraphicalOutputWindow::ComputeHorizontalCursorArea(float x, float y) const {
 	if (!mbShowPrintHead)
 		return vdrect32{};
+
+	y += mViewCursorYOffset;
 
 	// compute metrics
 	const sint32 offsetY = (mViewDpi * 8 + 48) / 96;

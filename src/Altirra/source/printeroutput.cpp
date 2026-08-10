@@ -314,7 +314,7 @@ bool ATPrinterGraphicalOutput::HasVectors() const {
 }
 
 void ATPrinterGraphicalOutput::Clear() {
-	mHeadY = mPageVBorderMM + mHeadFirstBitOffsetY;
+	mHeadY = mPageVBorderMM;
 	mpCurrentLine = nullptr;
 
 	// Notify each axis through its matching callback. The test15 snapshot
@@ -720,7 +720,7 @@ void ATPrinterGraphicalOutput::Print(double x, uint32 pins) {
 	if (!mbInvalidatedAll) {
 		vdrect32f r;
 		r.left = x - mDotRadiusMM;
-		r.top = mHeadY - mDotRadiusMM;
+		r.top = mHeadY;
 		r.right = r.left + mHeadWidth;
 		r.bottom = r.top + mHeadHeight;
 
@@ -783,7 +783,7 @@ void ATPrinterGraphicalOutput::PrintChar(double x, uint32 ch) {
 	if (ci.mDotPatternCount && !mbInvalidatedAll) {
 		vdrect32f r;
 		r.left = x - mDotRadiusMM;
-		r.top = mHeadY - mDotRadiusMM;
+		r.top = mHeadY;
 		r.right = x + ci.mAdvance + mDotRadiusMM;
 		r.bottom = r.top + mHeadHeight;
 
@@ -910,7 +910,7 @@ uint32 ATPrinterGraphicalOutput::ConvertColor(uint32 srgb) const {
 ATPrinterGraphicalOutput::Line& ATPrinterGraphicalOutput::CreateLine() {
 	if (!mpCurrentLine) {
 		Line newLine {};
-		newLine.mY = mHeadY - mDotRadiusMM;
+		newLine.mY = mHeadY;
 		newLine.mColumnStart = (uint32)mColumns.size();
 		newLine.mColumnCount = 0;
 

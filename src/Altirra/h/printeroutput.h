@@ -98,6 +98,10 @@ private:
 // to sweeps of the print head, and are culled accordingly; vectors are
 // free-form and extracted by bounding rects.
 //
+// For vectors, the head X and Y position is the center of the pen. For column
+// graphics, the head X is the center of the print head and the head Y is the
+// top of the top dot.
+//
 class ATPrinterGraphicalOutput final : public ATPrinterOutputBase, public IATPrinterGraphicalOutput {
 	ATPrinterGraphicalOutput(const ATPrinterGraphicalOutput&) = delete;
 	ATPrinterGraphicalOutput& operator=(const ATPrinterGraphicalOutput&) = delete;

@@ -3631,11 +3631,6 @@ void ATGTIAEmulator::UpdateRegisters(const RegisterChange *rc, int count) {
 					Sprite& sprite = mSprites[rc->mReg & 3];
 					uint8 newSize = value & 3;
 
-					// If VBXE is enabled, block size mode 2 -- it is equivalent to 0 and doesn't
-					// trigger the lockup state.
-					if (mpVBXE && newSize == 2)
-						newSize = 0;
-
 					if (sprite.mState.mSizeMode != newSize) {
 						// catch sprite state up to this point
 						sprite.Sync(rc->mPos);
@@ -3650,14 +3645,6 @@ void ATGTIAEmulator::UpdateRegisters(const RegisterChange *rc, int count) {
 				break;
 
 			case 0x0C:
-				// If VBXE is enabled, block size mode 2 -- it is equivalent to 0 and doesn't
-				// trigger the lockup state.
-				if (mpVBXE) {
-					const uint8 mode2Mask = value & (~value << 1);
-
-					value -= mode2Mask & 0xAA;
-				}
-
 				for(int i=0; i<4; ++i) {
 					Sprite& sprite = mSprites[i+4];
 

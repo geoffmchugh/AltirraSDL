@@ -62,7 +62,6 @@ This prerelease version:
    * UI: Reset Window Layout wasn't resetting undocked panes.
    * UI: Layout restore is more robust at fixing panes that are off-screen or unreasonably small.
    * UI: Fixed regression where Quit option in side panel didn't work.
-   * VBXE: GTIA size mode 2 lockup bug is no longer emulated when VBXE is active.
 
 Version 4.40 [December 31, 2025]
    [changes]

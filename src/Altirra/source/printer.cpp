@@ -1053,6 +1053,7 @@ ATPrinterGraphicsSpec ATDevicePrinter820::GetGraphicsSpec() const {
 	spec.mVerticalDotPitchMM = 0.44704f;	// 0.0176" vertical pitch
 	spec.mbBit0Top = true;
 	spec.mNumPins = 7;
+	spec.mBaselinePin = 6;
 	return spec;
 }
 
@@ -1242,6 +1243,7 @@ ATPrinterGraphicsSpec ATDevicePrinter1025::GetGraphicsSpec() const {
 	spec.mVerticalDotPitchMM = 0.44704f;	// 0.0176" vertical pitch
 	spec.mbBit0Top = true;
 	spec.mNumPins = 7;
+	spec.mBaselinePin = 6;
 	return spec;
 }
 
@@ -1612,6 +1614,7 @@ ATPrinterGraphicsSpec ATDevicePrinter1029::GetGraphicsSpec() const {
 	spec.mVerticalDotPitchMM = 0.403175f;	// 0.0159" vertical pitch
 	spec.mbBit0Top = true;
 	spec.mNumPins = 7;
+	spec.mBaselinePin = 6;
 	return spec;
 }
 
@@ -2051,6 +2054,7 @@ void ATDevicePrinter825::Init() {
 	spec.mVerticalDotPitchMM = 0.403175f;	// 0.0159" vertical pitch (guess)
 	spec.mbBit0Top = true;
 	spec.mNumPins = 9;
+	spec.mBaselinePin = 6;
 	mpGraphicsOutput = GetService<IATPrinterOutputManager>()->CreatePrinterGraphicalOutput(g_ATDeviceDefPrinter825.mpName, spec);
 }
 

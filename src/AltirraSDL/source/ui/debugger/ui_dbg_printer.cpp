@@ -403,6 +403,7 @@ private:
 	float mPageWidthMM = 0;
 	float mPageVBorderMM = 0;
 	float mViewCursorY = 0;		// print head Y position (mm)
+	float mViewCursorYOffset = 0;	// baseline-to-head cursor offset (mm)
 
 	bool mbDragging = false;
 	float mDragLastX = 0;
@@ -577,6 +578,14 @@ void ATImGuiPrinterOutputPaneImpl::AttachToGraphicalOutput(int index) {
 	mPageWidthMM = spec.mPageWidthMM;
 	mPageVBorderMM = spec.mPageVBorderMM;
 	mDotRadiusMM = spec.mDotRadiusMM;
+	if (spec.mbBit0Top) {
+		mViewCursorYOffset = spec.mVerticalDotPitchMM
+			* (float)spec.mBaselinePin + 2.0f * spec.mDotRadiusMM;
+	} else {
+		mViewCursorYOffset = spec.mVerticalDotPitchMM
+			* (float)(spec.mNumPins - 1 - spec.mBaselinePin)
+			+ 2.0f * spec.mDotRadiusMM;
+	}
 
 	// Set up invalidation callback
 	mGfxOnInvalidation = [this]() {
@@ -682,7 +691,8 @@ void ATImGuiPrinterOutputPaneImpl::UpdateGraphicalTexture(uint32 w, uint32 h) {
 
 	// Draw print head cursor — gray triangle on left edge (matching Windows)
 	{
-		float cursorPixelY = (mViewCursorY - vt.mOriginY) * vt.mPixelsPerMM;
+		float cursorPixelY = (mViewCursorY + mViewCursorYOffset
+			- vt.mOriginY) * vt.mPixelsPerMM;
 		int cy = (int)cursorPixelY;
 		if (cy >= -10 && cy < (int)h + 10) {
 			for (int dy = -5; dy <= 5; ++dy) {
@@ -893,7 +903,9 @@ void ATImGuiPrinterOutputPaneImpl::RenderGraphicalOutput() {
 			float contentTopY = winPos.y + winSize.y - (float)viewH;
 			float relY = clickPos.y - contentTopY;
 
-			float docY = mViewCenterY + (relY - viewH * 0.5f) * mViewMMPerPixel;
+			float docY = mViewCenterY
+				+ (relY - viewH * 0.5f) * mViewMMPerPixel
+				- mViewCursorYOffset;
 			docY = std::max(0.0f, docY);
 
 			mpCurrentGfxOutput->SetVerticalPos(docY);

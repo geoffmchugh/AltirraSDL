@@ -4,6 +4,8 @@ One line per sync, newest first.
 
 Format:  `YYYY-MM-DD  <OLD> → <NEW>  <summary>`
 
+2026-08-10  4.50-test16 → 4.50-test17  13 upstream-modified files: restored GTIA size-mode-2 lockup behavior with VBXE, expanded FX-80 command/form/tab/user-character and print rendering support, added printer baseline-pin geometry, corrected graphical output coordinates, and updated printer tables/changelog. Existing stronger PDF Unicode/font validation and printer fixes were preserved; the SDL printer debugger now mirrors baseline-aware cursor placement. Internal/package version advanced to 4.50.17. Linux release and 31 UI smoke tests passed.
+
 2026-07-14  4.50-test13 → 4.50-test14  Printer rasterizer/export rewrite, 1020 timing/FIFO/sound support, 1020/1029 accuracy fixes, H: device error handling, updated Windows resources/projects, and new printer PCM/vector support were merged. SDL integration added new 1020 audio resources, device configuration options, non-Windows date/error-translation support, GCC/Clang-safe int128 helpers, and merge-protection comments for the upstream printer sound-ID typo and GCC 12-incompatible static hasher operator. Linux release, libretro, and Bridge server builds passed.
 
 2026-06-22  4.50-test12 → 4.50-test13  18 upstream-changed files: debugger trace clearing after interrupted `gt`, 1020 accurate line stepping setting, 1020 Win32/SDL config UI, upstream Win32 ATUI quick-bar submenu refresh, upstream changelog, command icon metadata/assets, and Visual Studio metadata were merged. The SDL quick bar mirrors the new View submenu with artifacting, frame blending, scanlines, overscan, and fullscreen commands. Linux build passed.

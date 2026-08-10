@@ -15,6 +15,7 @@
 //	with this program. If not, see <http://www.gnu.org/licenses/>.
 
 #include <stdafx.h>
+#include <vd2/system/vdstl_algorithm.h>
 #include <at/atcore/propertyset.h>
 #include "printerfx80.h"
 #include "printerfontfx80.h"
@@ -41,12 +42,13 @@ void ATDevicePrinterFX80::GetDeviceInfo(ATDeviceInfo& info) {
 void ATDevicePrinterFX80::Init() {
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 215.9f;				// 8.5" wide paper
-	spec.mPageVBorderMM = 8.0f;				// vertical border
+	spec.mPageVBorderMM = kPaperLeftMarginMM<float>;				// vertical border
 	spec.mLeftMarginMM = kPaperLeftMarginMM<float>;
 	spec.mDotRadiusMM = 0.22f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 25.4f / 72.0f;	// 1/72"
 	spec.mbBit0Top = false;
 	spec.mNumPins = 9;
+	spec.mBaselinePin = 2;
 	mpGraphicsOutput = GetService<IATPrinterOutputManager>()->CreatePrinterGraphicalOutput(g_ATDeviceDefPrinterFX80.mpName, spec);
 }
 
@@ -121,6 +123,7 @@ void ATDevicePrinterFX80::ResetState() {
 	mEighthBitXorMask = 0x00;
 	mbIntlCharsEnabled = false;
 	mbItalicIntlCharsEnabled = false;
+	mIntlCharMode = 0;
 
 	mbExpandedCurrentLine = false;
 	mbExpandedAlways = false;
@@ -133,6 +136,17 @@ void ATDevicePrinterFX80::ResetState() {
 	mbItalic = false;
 	mbSuperscript = false;
 	mbSubscript = false;
+
+	mXPos = 0;
+	mYPos = 0;
+	mPrintXPos = 0;
+
+	// default to 11" paper
+	mFormHeightUnits = 216 * 11;
+
+	mNumCustomHTabs = -1;
+	mCustomVTabChannel = 0;
+	mCustomVTabChannelsSet = 0;
 
 	UpdateActiveState();
 
@@ -159,6 +173,7 @@ void ATDevicePrinterFX80::ProcessChar(uint8 ch) {
 			return;
 
 		case 0x09:	// HT	horizontal tab
+			ProcessCmdHorizontalTab();
 			return;
 
 		case 0x0A:	// LF	line feed
@@ -166,9 +181,11 @@ void ATDevicePrinterFX80::ProcessChar(uint8 ch) {
 			return;
 
 		case 0x0B:	// VT	vertical tab
+			ProcessCmdVerticalTab();
 			return;
 
 		case 0x0C:	// FF	form feed
+			ProcessCmdFormFeed();
 			return;
 
 		case 0x0D:	// CR	carriage return
@@ -183,13 +200,22 @@ void ATDevicePrinterFX80::ProcessChar(uint8 ch) {
 			return;
 
 		case 0x0F:	// SI	compressed on
-			mbCompressed = true;
-			UpdateActiveState();
+			if (!mbCompressed) {
+				FlushPrintBuffer();
+				mbCompressed = true;
+				UpdateActiveState();
+			}
+			return;
+
+		case 0x11:	// DC1	active state
 			return;
 
 		case 0x12:	// DC2	compressed off
-			mbCompressed = false;
-			UpdateActiveState();
+			if (mbCompressed) {
+				FlushPrintBuffer();
+				mbCompressed = false;
+				UpdateActiveState();
+			}
 			return;
 
 		case 0x13:	// DC3	deactivate printer
@@ -230,7 +256,7 @@ void ATDevicePrinterFX80::ProcessGraphics(uint8 ch) {
 		} else {
 			// check if the graphics extends beyond right column -- we need to
 			// discard everything past that
-			const uint32 newXPos = mXPos + mGraphicsXStep;
+			const sint32 newXPos = mXPos + mGraphicsXStep;
 			if (newXPos > kMaxWidthUnits - mRightMarginUnits)
 				mbGraphicsDiscard = true;
 			else {
@@ -273,8 +299,24 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			mEighthBitXorMask = 0x00;
 			break;
 
+		case 0x25:	// ESC %	Character set select
+			BeginCommand(2, &ATDevicePrinterFX80::ProcessCmdCharacterSelect);
+			break;
+
+		case 0x26:	// ESC &	Define characters in user RAM
+			BeginCommand(15, &ATDevicePrinterFX80::ProcessCmdDefineCharacters);
+			break;
+
 		case 0x2A:	// ESC *	Graphics mode
 			BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdGraphics);
+			break;
+
+		case 0x2D:	// ESC -	Underline mode
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdUnderlineMode);
+			break;
+
+		case 0x2F:	// ESC /	Select vertical tab channel
+			BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdSelectVerticalTabChannel);
 			break;
 
 		case 0x30:	// ESC 0	Set line spacing to 1/8 inch (9-dot)
@@ -309,6 +351,19 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			mbItalicIntlCharsEnabled = false;
 			break;
 
+		case 0x38:	// ESC 8	Disable paper-out sensor
+			break;
+
+		case 0x39:	// ESC 9	Enable paper-out sensor
+			break;
+
+		case 0x3A:	// ESC :	Copy ROM characters to RAM
+			BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdCopyROMChars);
+			break;
+
+		case 0x3C:	// ESC <	Turn on 1-line unidirectional mode
+			break;
+
 		case 0x3D:	// ESC =	Set eighth bit to 0
 			mEighthBitAndMask = 0x7F;
 			mEighthBitXorMask = 0x00;
@@ -319,8 +374,28 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			mEighthBitXorMask = 0x80;
 			break;
 
+		case 0x3F:	// ESC ?	Redefine alternate graphics code
+			BeginCommand(2, &ATDevicePrinterFX80::ProcessCmdRedefineAlternateGraphicsCode);
+			break;
+
+		case 0x40:	// ESC @	Reset code
+			ResetState();
+			break;
+
 		case 0x41:	// ESC A	Set line spacing to n/72 inch
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdLineSpacingCoarse);
+			break;
+
+		case 0x42:	// ESC B	Set vertical tabs
+			ProcessCmdSetVerticalTabs();
+			break;
+
+		case 0x43:	// ESC C	Set form length
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetFormLength);
+			break;
+
+		case 0x44:	// ESC D	Set horizontal tabs
+			ProcessCmdSetHorizontalTabs();
 			break;
 
 		case 0x45:	// ESC E	Emphasized mode on
@@ -370,6 +445,14 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			}
 			break;
 
+		case 0x4E:	// ESC N	Skip over perforation on
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSkipOverPerforationOn);
+			break;
+
+		case 0x4F:	// ESC O	Skip over perforation off
+			ProcessCmdSkipOverPerforationOff();
+			break;
+
 		case 0x50:	// ESC P	Elite mode off
 			if (mbElite) {
 				mbElite = false;
@@ -379,7 +462,11 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 
 		case 0x51:	// ESC Q	Set right margin
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdRightMargin);
-			return;
+			break;
+
+		case 0x52:	// ESC R	Select international character set
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSelectIntlCharSet);
+			break;
 		
 		case 0x53:	// ESC S	Turn on superscript/subscript mode
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSuperSubScript);
@@ -389,6 +476,10 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			mbSuperscript = false;
 			mbSubscript = false;
 			UpdateActiveState();
+			break;
+
+		case 0x55:	// ESC U	Turn on/off unidirectional mode
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdUnidirectionalMode);
 			break;
 
 		case 0x57:	// ESC W	Turn on/off expanded mode
@@ -407,6 +498,9 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdGraphics9Pin);
 			break;
 
+		case 0x62:	// ESC b	Set vertical tabs for channel n
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannel);
+
 		case 0x6A:	// ESC j	Reverse feed n/216"
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdReverseFeed);
 			break;
@@ -417,6 +511,11 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 
 		case 0x70:	// ESC p	Turn on/off proportional mode
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdProportional);
+			break;
+
+		case 0x73:	// ESC s	Select print speed
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSelectPrintSpeed);
+			break;
 
 		default:
 			// Any unrecognized escape chars are ignored and eaten
@@ -469,6 +568,84 @@ void ATDevicePrinterFX80::ProcessCmdBackspace() {
 	mXPos -= width;
 }
 
+void ATDevicePrinterFX80::ProcessCmdCharacterSelect() {
+	const uint8 font = mCommandArgBuf[0] & 0x7F;
+	const uint8 area = mCommandArgBuf[1] & 0x7F;
+
+	if (area)
+		return;
+
+	if (font >= 2)
+		return;
+
+	const bool useUserChars = (font == 1);
+
+	if (mbUserCharsEnabled != useUserChars) {
+		FlushPrintBuffer();
+		mbUserCharsEnabled = useUserChars;
+	}
+}
+
+void ATDevicePrinterFX80::ProcessCmdCopyROMChars() {
+	// validate all three unused parameters as 7-bit zeroes
+	for(int i=0; i<3; ++i) {
+		if (mCommandArgBuf[i] & 0x7F)
+			return;
+	}
+
+	memcpy(mUserFontData, g_ATPrinterFontFX80.mFont, sizeof(mUserFontData));
+	memcpy(mUserFontStartStop, g_ATPrinterFontFX80.mPropStartStop, sizeof(mUserFontStartStop));
+}
+
+void ATDevicePrinterFX80::ProcessCmdDefineCharacters() {
+	const uint8 area = mCommandArgBuf[0];
+	const uint8 startChar = mCommandArgBuf[1];
+	const uint8 endChar = mCommandArgBuf[2];
+
+	// memory area must be 0
+	if ((area & 0x7F) != 0)
+		return;
+
+	// start char must be <= end char
+	if (startChar > endChar)
+		return;
+
+	// break out start/end columns from control byte
+	uint8 startColumn = (mCommandArgBuf[3] >> 4) & 7;
+	uint8 endColumn = mCommandArgBuf[3] & 15;
+
+	// validate minimum width of 5 columns and max 12 columns; force full
+	// columns on violation
+	if (endColumn >= 12 || startColumn > endColumn || endColumn - startColumn < 4) {
+		startColumn = 0;
+		endColumn = 11;
+	}
+
+	// set metadata
+	mUserFontStartStop[startChar][0] = startColumn;
+	mUserFontStartStop[startChar][1] = endColumn;
+
+	// copy over columns, applying descender shift if needed -- note that we are
+	// leaving column 12 blank, as it always is
+	const bool descender = (mCommandArgBuf[3] & 0x80) != 0;
+
+	for(int i=0; i<11; ++i) {
+		const uint16 pins = mCommandArgBuf[4 + i];
+
+		if (descender)
+			mUserFontData[startChar][i] = pins;
+		else
+			mUserFontData[startChar][i] = pins << 1;
+	}
+
+	// if there are more chars, loop for more
+	if (startChar < endChar) {
+		BeginCommand(15, &ATDevicePrinterFX80::ProcessCmdDefineCharacters);
+		++mCommandArgBuf[1];
+		mPendingCommandCharIndex = 3;
+	}
+}
+
 void ATDevicePrinterFX80::ProcessCmdExpanded() {
 	const auto enable = ParseBool();
 
@@ -477,6 +654,10 @@ void ATDevicePrinterFX80::ProcessCmdExpanded() {
 
 	mbExpandedCurrentLine = mbExpandedAlways = enable.value();
 	UpdateActiveState();
+}
+
+void ATDevicePrinterFX80::ProcessCmdFormFeed() {
+	FeedPaper(mFormHeightUnits - mYPos);
 }
 
 void ATDevicePrinterFX80::ProcessCmdGraphics(uint8 mode) {
@@ -559,6 +740,37 @@ void ATDevicePrinterFX80::ProcessCmdGraphics9Pin() {
 	mGraphicsBytesLeft *= 2;
 }
 
+void ATDevicePrinterFX80::ProcessCmdHorizontalTab() {
+	// Check if custom tabs have been set.
+	if (mNumCustomHTabs >= 0) {
+		// find first tab beyond current horizontal position
+		for(int i=0; i<mNumCustomHTabs; ++i) {
+			if (mCustomHTabs[i] > mXPos) {
+				FlushPrintBuffer();
+
+				if (mCustomHTabs[i] <= kMaxWidthUnits - mRightMarginUnits)
+					mXPos = mCustomHTabs[i];
+				break;
+			}
+		}
+	} else {
+		// Add spaces until the horizontal position is a multiple of 8. This
+		// applies even if a wrap is needed.
+		//
+		// There is one problem here. Only two characters are required between
+		// the margins, so it's possible that the printer will NEVER be able
+		// to complete a tab operation. This is a problem when we are running
+		// in immediate mode. We cut off the tab operation after a while
+		// if it looks like it'll go on forever.
+		for(int i=0; i<100; ++i) {
+			BufferChar(0x20);
+
+			if (!(mBufferedCharCount & 7))
+				break;
+		}
+	}
+}
+
 void ATDevicePrinterFX80::ProcessCmdIntlChars() {
 	const auto enable = ParseBool();
 
@@ -579,6 +791,9 @@ void ATDevicePrinterFX80::ProcessCmdLeftMargin() {
 	// change left margin
 	mLeftMarginUnits = leftMarginUnits;
 
+	// turn off custom horizontal tabs
+	mNumCustomHTabs = -1;
+
 	// cancel the print buffer
 	ClearPrintBuffer();
 }
@@ -595,6 +810,9 @@ void ATDevicePrinterFX80::ProcessCmdLineSpacingFine() {
 }
 
 void ATDevicePrinterFX80::ProcessCmdMasterSelect() {
+	// flush print buffer even if nothing changes
+	FlushPrintBuffer();
+
 	// Master select code bits are as follows:
 	//
 	//	1 - elite
@@ -627,6 +845,24 @@ void ATDevicePrinterFX80::ProcessCmdProportional() {
 	UpdateActiveState();
 }
 
+void ATDevicePrinterFX80::ProcessCmdRedefineAlternateGraphicsCode() {
+	const uint8 ch = mCommandArgBuf[0];
+	const uint8 mode = mCommandArgBuf[1];
+
+	if (mode >= 8)
+		return;
+
+	switch(ch) {
+		case 'K': mRedefinableGraphicsModes[0] = mode; break;
+		case 'L': mRedefinableGraphicsModes[1] = mode; break;
+		case 'Y': mRedefinableGraphicsModes[2] = mode; break;
+		case 'Z': mRedefinableGraphicsModes[3] = mode; break;
+
+		default:
+			break;
+	}
+}
+
 void ATDevicePrinterFX80::ProcessCmdReverseFeed() {
 	const sint32 increment = mCommandArgBuf[0];
 
@@ -653,6 +889,176 @@ void ATDevicePrinterFX80::ProcessCmdRightMargin() {
 	ClearPrintBuffer();
 }
 
+void ATDevicePrinterFX80::ProcessCmdSelectIntlCharSet() {
+	const uint8 mode = mCommandArgBuf[0] & 0x7F;
+
+	if (mode >= 9)
+		return;
+
+	mIntlCharMode = mode;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSelectPrintSpeed() {
+	const auto mode = ParseBool();
+
+	if (mode.has_value() && mbSlowPrintSpeed != mode.value()) {
+		FlushPrintBuffer();
+
+		mbSlowPrintSpeed = mode.value();
+	}
+}
+
+void ATDevicePrinterFX80::ProcessCmdSelectVerticalTabChannel() {
+	const uint8 channel = mCommandArgBuf[0];
+
+	if (channel >= 8)
+		return;
+
+
+	mCustomVTabChannel = channel;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetFormLength() {
+	const uint8 lines = mCommandArgBuf[0];
+
+	// ESC c 0 n sets the form length in inches. Note that this must be 0;
+	// $80 will not work.
+	if (lines == 0) {
+		BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetFormLengthInches);
+		return;
+	}
+
+	ProcessCmdSetFormLength(mLineSpacingUnits * (lines & 0x7F));
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetFormLengthInches() {
+	const uint8 lines = mCommandArgBuf[0] & 0x7F;
+
+	// reject inputs over 22 lines (per docs)
+	if (lines >= 23)
+		return;
+
+	ProcessCmdSetFormLength(lines * 216);
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetFormLength(sint32 units) {
+	// zero is not valid
+	if (!units)
+		return;
+
+	mFormHeightUnits = units;
+
+	// vertical pos is reset and perforation skip turned off
+	mYPos = 0;
+
+	// disable all custom vertical tabs
+	mCustomVTabChannelsSet = 0;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetHorizontalTabs() {
+	// reset tab table
+	mNumCustomHTabs = 0;
+
+	BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetHorizontalTabsNext);
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetHorizontalTabsNext() {
+	const uint8 charPos = mCommandArgBuf[0];
+
+	// 0 or a value less than previous ends the list
+	if (!charPos || charPos < mCustomHTabCharLast)
+		return;
+
+	mCustomHTabCharLast = charPos;
+
+	const uint32 charWidth = mbProportional ? 72 : GetCharWidth(0x20);
+	const uint32 tabPos = charWidth * charPos;
+
+	// store up to 32 tabs; discard afterward but keep reading the list
+	if (mNumCustomHTabs < (int)vdcountof(mCustomHTabs))
+		mCustomHTabs[mNumCustomHTabs++] = tabPos;
+
+	BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetHorizontalTabsNext);
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetVerticalTabs() {
+	mCommandArgBuf[0] = 0;
+
+	ProcessCmdSetVerticalTabChannel();
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannel() {
+	const uint8 channel = mCommandArgBuf[0];
+
+	if (channel >= 8)
+		return;
+
+	// mark the tab channel as set, and clear it
+	mCustomVTabChannelsSet |= 1 << channel;
+
+	memset(&mCustomVTabs[channel][0], 0, sizeof mCustomVTabs[channel]);
+
+	// begin reading tabs
+	BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannelNext);
+	mCommandArgBuf[1] = 0;
+	mPendingCommandCharIndex = 2;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannelNext() {
+	uint8 channel = mCommandArgBuf[0];
+	uint8 nextIndex = mCommandArgBuf[1];
+	uint8 vtLine = mCommandArgBuf[2];
+
+	VDASSERT(channel < 8 && nextIndex < 16);
+
+	channel &= 7;
+	nextIndex &= 15;
+
+	// 0 ends the list
+	if (vtLine == 0)
+		return;
+
+	const uint16 vtPos = (uint32)vtLine * mLineSpacingUnits;
+
+	// if there's room in the vtab list, and the new tab is below the last one,
+	// add it -- otherwise, begin skipping
+	if (nextIndex < 16) {
+		const bool tabOrderOk = !nextIndex || vtPos > mCustomVTabs[channel][nextIndex - 1];
+
+		if (tabOrderOk && (sint32)vtPos < mFormHeightUnits) {
+			mCustomVTabs[channel][nextIndex] = vtPos;
+			++mCommandArgBuf[1];
+		} else {
+			// force skipping of remaining vtabs
+			mCommandArgBuf[1] = 16;
+		}
+	}
+
+	BeginCommand(3, &ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannelNext);
+	mPendingCommandCharIndex = 2;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSkipOverPerforationOn() {
+	const sint32 lines = mCommandArgBuf[0] & 0x7F;
+
+	// zero is not valid
+	if (!lines)
+		return;
+
+	// convert to units
+	const sint32 units = lines * mLineSpacingUnits;
+
+	// ignore request if >= page height
+	if (units >= mFormHeightUnits)
+		return;
+
+	mPerforationSkipDistance = units;
+}
+
+void ATDevicePrinterFX80::ProcessCmdSkipOverPerforationOff() {
+	mPerforationSkipDistance = 0;
+}
+
 void ATDevicePrinterFX80::ProcessCmdSuperSubScript() {
 	const auto mode = ParseBool();
 
@@ -663,6 +1069,45 @@ void ATDevicePrinterFX80::ProcessCmdSuperSubScript() {
 	mbSubscript = (mode.value() == true);
 
 	UpdateActiveState();
+}
+
+void ATDevicePrinterFX80::ProcessCmdUnderlineMode() {
+	const auto mode = ParseBool();
+
+	if (!mode.has_value())
+		return;
+
+	mbUnderline = mode.value();
+	UpdateActiveState();
+}
+
+void ATDevicePrinterFX80::ProcessCmdUnidirectionalMode() {
+	// currently ignored -- does not flush print buffer anyway
+}
+
+void ATDevicePrinterFX80::ProcessCmdVerticalTab() {
+	FlushPrintBuffer();
+	mXPos = 0;
+
+	// check if custom tabs have been enabled for the current vtab channel
+	if (!(mCustomVTabChannelsSet & (1 << mCustomVTabChannel))) {
+		// no -- just do a line feed
+		PrintLF();
+		return;
+	}
+
+	// search for the next vertical tab >= current vpos
+	const auto& vtChannel = mCustomVTabs[mCustomVTabChannel];
+
+	for(const uint16& vtPos : vtChannel) {
+		if (vtPos > mYPos) {
+			FeedPaper(vtPos - mYPos);
+			return;
+		}
+	}
+
+	// no vtab found -- do form feed
+	ProcessCmdFormFeed();
 }
 
 void ATDevicePrinterFX80::UpdateActiveState() {
@@ -699,6 +1144,9 @@ void ATDevicePrinterFX80::UpdateActiveState() {
 
 	if (mbExpandedCurrentLine)
 		mActiveCharAttr |= CharAttr::Expanded;
+
+	if (mbUnderline)
+		mActiveCharAttr |= CharAttr::Underline;
 }
 
 void ATDevicePrinterFX80::BufferChar(uint8 ch) {
@@ -733,7 +1181,11 @@ sint32 ATDevicePrinterFX80::GetCharWidth(uint8 ch, CharAttr attr) const {
 	sint32 width = kWidthUnitsPerCharPica;
 
 	if (+(attr & CharAttr::Proportional)) {
-		const auto [start, stop] = g_ATPrinterFontFX80.mPropStartStop[ch];
+		const uint8 (&startStop)[2] = mbUserCharsEnabled
+			? mUserFontStartStop[ch]
+			: g_ATPrinterFontFX80.mPropStartStop[ch];
+
+		const auto [start, stop] = startStop;
 		width = ((stop + 1) - start) * (kWidthUnitsPerCharPica / 12);
 	} else {
 		switch(+(attr & (CharAttr::Elite | CharAttr::Compressed))) {
@@ -770,41 +1222,89 @@ void ATDevicePrinterFX80::ClearPrintBuffer() {
 }
 
 void ATDevicePrinterFX80::FlushPrintBuffer() {
-	if (mpGraphicsOutput) {
-		CharAttr allCharAttrs = CharAttr::None;
-		sint32 xpos = mPrintXPos;
+	if (!mpGraphicsOutput) {
+		mBufferedCharCount = 0;
+		return;
+	}
 
-		for(int pass = 0; pass < 2; ++pass) {
-			for(const BufferedChar& ch : vdspan(mCharBuffer, mBufferedCharCount)) {
-				const uint16 *charDat = &g_ATPrinterFontFX80.mFont[ch.mChar][0];
+	CharAttr allCharAttrs = CharAttr::None;
+	sint32 xpos = 0;
 
-				// compute paper position for left edge of character
-				double paperXPos = kPaperLeftMarginMM<double> + kMMPerHorizUnit<double> * (double)xpos;
+	for(int pass = 0; pass < 3; ++pass) {
+		const CharAttr requiredAttrBit
+			= pass == 1 ? CharAttr::DoubleStrike
+			: pass == 2 ? CharAttr::Underline
+			: CharAttr::None;
 
-				// compute paper x-step for each dot column, based on character width
-				// (12 columns / char)
-				const sint32 charWidth = GetCharWidth(ch.mChar, ch.mAttributes);
-				double paperDXPos = 0;
-				int startColumn = 0;
-				int stopColumn = 11;
+		const bool doingUnderline = (pass == 2);
+
+		xpos = mPrintXPos;
+
+		for(const BufferedChar& ch : vdspan(mCharBuffer, mBufferedCharCount)) {
+			const uint16 *charDat = mbUserCharsEnabled
+				? &mUserFontData[ch.mChar][0]
+				: &g_ATPrinterFontFX80.mFont[ch.mChar][0];
+
+			// compute paper position for left edge of character
+			double paperXPos = kPaperLeftMarginMM<double> + kMMPerHorizUnit<double> * (double)xpos;
+
+			// compute paper x-step for each dot column, based on character width
+			// (12 columns / char)
+			const sint32 charWidth = GetCharWidth(ch.mChar, ch.mAttributes);
+			double paperDXPos = 0;
+			int startColumn = 0;
+			int stopColumn = 11;
 				
-				if (+(ch.mAttributes & CharAttr::Proportional)) {
-					// proportional is always pica or pica expanded
-					paperDXPos = +(ch.mAttributes & CharAttr::Expanded) ? kMMPerHorizUnit<double> * 12 : kMMPerHorizUnit<double> * 6;
+			if (+(ch.mAttributes & CharAttr::Proportional)) {
+				// proportional is always pica or pica expanded
+				paperDXPos = +(ch.mAttributes & CharAttr::Expanded) ? kMMPerHorizUnit<double> * 12 : kMMPerHorizUnit<double> * 6;
 
-					startColumn = g_ATPrinterFontFX80.mPropStartStop[ch.mChar][0];
-					stopColumn = g_ATPrinterFontFX80.mPropStartStop[ch.mChar][1];
-				} else {
-					paperDXPos = (kMMPerHorizUnit<double> / 12.0) * (double)charWidth;
+				const uint8 (&startStop)[2] = mbUserCharsEnabled
+					? mUserFontStartStop[ch.mChar]
+					: g_ATPrinterFontFX80.mPropStartStop[ch.mChar];
+
+				startColumn = startStop[0];
+				stopColumn = startStop[1];
+			} else {
+				// The dot column spacing for the sub-pica modes are different
+				// than the width. Elite is only 16% narrower in character
+				// spacing but a full 33% narrower in column spacing. Similarly,
+				// compressed characters are half width even though the spacing
+				// is 58% of pica.
+
+				if (+(ch.mAttributes & CharAttr::Compressed))
+					paperDXPos = kMMPerHorizUnit<double> * 3;
+				else if (+(ch.mAttributes & CharAttr::Elite))
+					paperDXPos = kMMPerHorizUnit<double> * 4;
+				else
+					paperDXPos = kMMPerHorizUnit<double> * 6;
+
+				if (+(ch.mAttributes & CharAttr::Expanded))
+					paperDXPos *= 2;
+			}
+
+			// for the second and third passes, skip chars that don't have the required attribute bit
+			if ((ch.mAttributes & requiredAttrBit) == requiredAttrBit) {
+				uint32 prevPins = 0;
+				uint32 underlinePins = 0;
+				uint32 activeUnderlinePins = 0;
+
+				if (doingUnderline) {
+					underlinePins = 1;
+					activeUnderlinePins = mbSlowPrintSpeed && (xpos & 1) ? 0 : 1;
 				}
 
+				for(int i = startColumn; i <= stopColumn; ++i) {
+					uint32 pins = 0;
 
-				// for the second pass, skip any chars that aren't double strike
-				if (!pass || +(ch.mAttributes & CharAttr::DoubleStrike)) {
-					uint32 prevPins = 0;
+					// if not at half speed, underline only every other pin
+					if (doingUnderline) {
+						pins = activeUnderlinePins;
 
-					for(int i = startColumn; i <= stopColumn; ++i) {
-						uint32 pins = charDat[i];
+						if (!mbSlowPrintSpeed)
+							activeUnderlinePins ^= underlinePins;
+					} else {
+						pins = charDat[i];
 
 						if (+(ch.mAttributes & (CharAttr::Emphasized | CharAttr::Expanded))) {
 							const uint32 newPins = pins | prevPins;
@@ -815,7 +1315,7 @@ void ATDevicePrinterFX80::FlushPrintBuffer() {
 
 						if (+(ch.mAttributes & (CharAttr::Subscript | CharAttr::Superscript))) {
 							// select even/odd pins
-							if (pass)
+							if (!pass)
 								pins <<= 1;
 
 							// compress pins
@@ -829,38 +1329,52 @@ void ATDevicePrinterFX80::FlushPrintBuffer() {
 							if (+(ch.mAttributes & CharAttr::Subscript))
 								pins >>= 4;
 						}
+					}
 
-						if (pins) {
-							mpGraphicsOutput->Print(paperXPos + paperDXPos * (double)i, pins);
+					if (pins) {
+						mpGraphicsOutput->Print(paperXPos + paperDXPos * (double)i, pins);
 
-							if (+(ch.mAttributes & CharAttr::Emphasized))
-								mpGraphicsOutput->Print(paperXPos + paperDXPos * ((double)i + 0.5), pins);
-						}
+						if (+(ch.mAttributes & CharAttr::Emphasized))
+							mpGraphicsOutput->Print(paperXPos + paperDXPos * ((double)i + 0.5), pins);
 					}
 				}
-
-				xpos += charWidth;
-				allCharAttrs |= ch.mAttributes;
 			}
 
-			// If we found double strike, we need to feed paper and do another
-			// pass. Otherwise, we're done.
-			if (!(allCharAttrs & CharAttr::DoubleStrike))
-				break;
-
-			// At the end of the first pass, feed paper up by 1/216", then back
-			// down by that much after the second pass. This is a third of a dot
-			// since the dots are separated by 1/72", but the FX-80 doesn't have
-			// the resolution to do half a dot.
-			mpGraphicsOutput->FeedPaper(pass ? -kMMPerVertUnit<double> : kMMPerVertUnit<double>);
-
-			if (!pass)
-				xpos = mPrintXPos;
+			xpos += charWidth;
+			allCharAttrs |= ch.mAttributes;
 		}
 
-		mPrintXPos = xpos;
+		// check if we need to do subsequent passes and how much to feed paper
+		if (pass == 0) {
+			// if no double-strike or underline, we're done
+			if (!(allCharAttrs & (CharAttr::DoubleStrike | CharAttr::Underline)))
+				break;
+
+			// If we still need to do double-strike, feed paper up by 1/216"; the
+			// FX-80 can't do half a dot so a third will have to do. Otherwise, if
+			// we still have underline to do, feed paper down two dots (6/216").
+			if (+(allCharAttrs & CharAttr::DoubleStrike)) {
+				mpGraphicsOutput->FeedPaper(-kMMPerVertUnit<double>);
+			} else {
+				mpGraphicsOutput->FeedPaper(6 * kMMPerVertUnit<double>);
+				pass = 1;
+			}
+		} else if (pass == 1) {
+			// if no underline, feed paper and we're done
+			if (!(allCharAttrs & CharAttr::Underline)) {
+				mpGraphicsOutput->FeedPaper(kMMPerVertUnit<double>);
+				break;
+			} else {
+				// undo -1/216" feed and then do 6/216" (two dots) for underline
+				mpGraphicsOutput->FeedPaper(7 * kMMPerVertUnit<double>);
+			}
+		} else {
+			// undo 6/216" from underline
+			mpGraphicsOutput->FeedPaper(-6 * kMMPerVertUnit<double>);
+		}
 	}
 
+	mPrintXPos = xpos;
 	mBufferedCharCount = 0;
 }
 
@@ -868,6 +1382,45 @@ uint8 ATDevicePrinterFX80::TransformPrintCharacter(uint8 ch) const {
 	// apply 8th bit set/reset
 	ch = (ch & mEighthBitAndMask) ^ mEighthBitXorMask;
 
+	// transform international characters
+	if (mIntlCharMode) {
+		static constexpr uint8 kIntlCharMap[9][12] {
+			//  #     $     @     [     \     ]     ^     `     {     |     }     ~
+			{ 0x23, 0x24, 0x40, 0x5B, 0x5C, 0x5D, 0x5E, 0x60, 0x7B, 0x7C, 0x7D, 0x7E },	// USA
+			{ 0x23, 0x24, 0x00, 0x05, 0x0F, 0x10, 0x5E, 0x60, 0x1E, 0x02, 0x01, 0x16 },	// France
+			{ 0x23, 0x24, 0x10, 0x17, 0x18, 0x19, 0x5E, 0x60, 0x1A, 0x1B, 0x1C, 0x11 },	// Germany
+			{ 0x06, 0x24, 0x40, 0x5B, 0x5C, 0x5D, 0x5E, 0x60, 0x7B, 0x7C, 0x7D, 0x7E },	// UK
+			{ 0x23, 0x24, 0x40, 0x12, 0x14, 0x0D, 0x5E, 0x60, 0x13, 0x15, 0x0E, 0x7E },	// Denmark
+			{ 0x23, 0x0B, 0x1D, 0x17, 0x18, 0x0D, 0x19, 0x1E, 0x1A, 0x1B, 0x0E, 0x1C },	// Sweden
+			{ 0x23, 0x24, 0x40, 0x05, 0x5C, 0x1E, 0x5E, 0x02, 0x00, 0x03, 0x01, 0x04 },	// Italy
+			{ 0x0C, 0x24, 0x40, 0x07, 0x09, 0x08, 0x5E, 0x60, 0x16, 0x0A, 0x7D, 0x7E },	// Spain
+			{ 0x23, 0x24, 0x40, 0x5B, 0x1F, 0x5D, 0x5E, 0x60, 0x7B, 0x7C, 0x7D, 0x7E },	// Japan
+		};
+
+		int charIdx = -1;
+
+		switch(ch & 0x7F) {
+			case 0x23: charIdx = 0; break;
+			case 0x24: charIdx = 1; break;
+			case 0x40: charIdx = 2; break;
+			case 0x5B: charIdx = 3; break;
+			case 0x5C: charIdx = 4; break;
+			case 0x5D: charIdx = 5; break;
+			case 0x5E: charIdx = 6; break;
+			case 0x60: charIdx = 7; break;
+			case 0x7B: charIdx = 8; break;
+			case 0x7C: charIdx = 9; break;
+			case 0x7D: charIdx = 10; break;
+			case 0x7E: charIdx = 11; break;
+			default:
+				break;
+		}
+
+		if (charIdx >= 0)
+			ch = kIntlCharMap[mIntlCharMode][charIdx];
+	}
+
+	// apply italics
 	if (mbItalic)
 		ch |= 0x80;
 
@@ -901,6 +1454,20 @@ void ATDevicePrinterFX80::FeedPaper() {
 }
 
 void ATDevicePrinterFX80::FeedPaper(sint32 units) {
+	mYPos += units;
+
+	if (mPerforationSkipDistance && mYPos + mPerforationSkipDistance >= mFormHeightUnits) {
+		units += mPerforationSkipDistance;
+		mYPos += mPerforationSkipDistance;
+	}
+
+	if ((uint32)mYPos >= (uint32)mFormHeightUnits) {
+		mYPos %= mFormHeightUnits;
+
+		if (mYPos < 0)
+			mYPos += mFormHeightUnits;
+	}
+
 	if (mpGraphicsOutput)
 		mpGraphicsOutput->FeedPaper(kMMPerVertUnit<double> * (double)units);
 }
