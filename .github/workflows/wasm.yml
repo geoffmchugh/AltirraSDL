@@ -485,6 +485,21 @@ jobs:
       - name: List downloaded artifacts
         run: ls -lh dist/
 
+      - name: Delete stale WebAssembly assets from nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release view nightly --repo "$GITHUB_REPOSITORY" \
+                  --json assets --jq '.assets[].name' \
+                  | grep -E '^AltirraSDL-.*-wasm\.zip$' \
+                  | while read -r asset; do
+                      echo "Deleting stale asset: $asset"
+                      gh release delete-asset nightly "$asset" \
+                          --repo "$GITHUB_REPOSITORY" --yes || true
+                  done
+          fi
+
       # Move the rolling `nightly` tag to the current commit.  Same
       # pattern as linux.yml / windows.yml / macos.yml — this
       # converges idempotently when several platform jobs all PATCH

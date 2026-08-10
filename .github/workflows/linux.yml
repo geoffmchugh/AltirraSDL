@@ -196,6 +196,24 @@ jobs:
       - name: List downloaded artifacts
         run: ls -lh dist/
 
+      # action-gh-release replaces same-name files but does not remove assets
+      # whose version changed. Delete only Linux AppImages so concurrent
+      # platform publishers cannot remove one another's artifacts.
+      - name: Delete stale Linux assets from nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release view nightly --repo "$GITHUB_REPOSITORY" \
+                  --json assets --jq '.assets[].name' \
+                  | grep -E '^AltirraSDL-.*-linux-(x86_64|aarch64)\.AppImage$' \
+                  | while read -r asset; do
+                      echo "Deleting stale asset: $asset"
+                      gh release delete-asset nightly "$asset" \
+                          --repo "$GITHUB_REPOSITORY" --yes || true
+                  done
+          fi
+
       # Force-move the rolling `nightly` tag to the commit that was just
       # built so GitHub regenerates the "Source code (zip/tar.gz)"
       # archives from the current `main`. Runs only after `appimage`

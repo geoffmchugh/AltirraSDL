@@ -151,6 +151,22 @@ jobs:
           name: AltirraSDL-windows-x86_64
           path: dist
 
+      - name: Delete stale Windows assets from nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release view nightly --repo "$GITHUB_REPOSITORY" \
+                  --json assets --jq '.assets[].name' \
+                  | grep -E '^AltirraSDL-.*-windows\.zip$' \
+                  | while read -r asset; do
+                      echo "Deleting stale asset: $asset"
+                      gh release delete-asset nightly "$asset" \
+                          --repo "$GITHUB_REPOSITORY" --yes || true
+                  done
+          fi
+
       # Force-move the rolling `nightly` tag to the commit that was just
       # built so GitHub regenerates the "Source code (zip/tar.gz)"
       # archives from the current `main`. Same-SHA idempotent across
