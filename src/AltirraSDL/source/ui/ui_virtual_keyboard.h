@@ -1,6 +1,6 @@
 //	AltirraSDL - Virtual on-screen keyboard
-//	Displays an Atari XL/XE keyboard image with clickable/touchable keys.
-//	Supports mouse, touch (Android), and gamepad D-pad navigation.
+//	Displays a touch-friendly paged Atari XL/XE keyboard.
+//	Supports mouse, touch, and controller-only D-pad navigation.
 
 #pragma once
 
@@ -19,7 +19,7 @@ void ATUIVirtualKeyboard_Shutdown();
 
 // Main render function — call from ATUIRenderFrame().
 // Returns true if the keyboard requested to be closed (close button pressed).
-bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int placement);
+bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int& placement);
 
 // Handle SDL events (gamepad D-pad/A for navigation, touch for mobile).
 // Returns true if the event was consumed by the virtual keyboard.

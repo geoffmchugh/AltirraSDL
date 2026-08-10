@@ -486,6 +486,26 @@ static void HandleEvents() {
 			ATEmotePicker::Open();
 			continue;
 		}
+		// A visible virtual keyboard owns its controller controls before the
+		// Gaming Mode global bindings. In particular, LB/RB are Shift/Control
+		// here; allowing ATMobileGamepad_HandleEvent() to see them first would
+		// open the hamburger or toggle pause instead.
+		if (g_uiState.showVirtualKeyboard
+			&& (!ATUIIsGamingMode()
+				|| g_mobileState.currentScreen == ATMobileUIScreen::None))
+		{
+			if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
+				&& (ev.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH
+					|| ev.gbutton.button == SDL_GAMEPAD_BUTTON_EAST))
+			{
+				g_uiState.showVirtualKeyboard = false;
+				ATUIVirtualKeyboard_ReleaseAll(g_sim);
+				continue;
+			}
+			if (ATUIVirtualKeyboard_HandleEvent(ev, g_sim, true))
+				continue;
+		}
+
 		// Route touch/gamepad events to Gaming Mode UI before ImGui
 		if (ATUIIsGamingMode()) {
 			if (ATMobileGamepad_HandleEvent(ev, g_sim, g_mobileState))
@@ -531,7 +551,8 @@ static void HandleEvents() {
 			bool mobileUIActive = ATUIIsGamingMode()
 				&& (g_mobileState.currentScreen != ATMobileUIScreen::None);
 			if (!mobileUIActive) {
-				if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
+				if (!g_uiState.showVirtualKeyboard
+					&& ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
 					&& ev.gbutton.button == SDL_GAMEPAD_BUTTON_NORTH) {
 					g_uiState.showVirtualKeyboard = !g_uiState.showVirtualKeyboard;
 					if (!g_uiState.showVirtualKeyboard)
@@ -542,17 +563,6 @@ static void HandleEvents() {
 						ATTouchControls_ReleaseAll();  // hide touch controls cleanly
 					}
 					continue;
-				}
-				if (g_uiState.showVirtualKeyboard) {
-					if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
-						&& ev.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
-						// B button closes the keyboard
-						g_uiState.showVirtualKeyboard = false;
-						ATUIVirtualKeyboard_ReleaseAll(g_sim);
-						continue;
-					}
-					if (ATUIVirtualKeyboard_HandleEvent(ev, g_sim, true))
-						continue;
 				}
 			}
 		}

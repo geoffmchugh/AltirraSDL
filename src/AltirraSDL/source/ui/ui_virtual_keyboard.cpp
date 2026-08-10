@@ -1,10 +1,14 @@
 //	AltirraSDL - Virtual on-screen keyboard
-//	Displays a photographic Atari XL/XE keyboard image with clickable keys.
-//	Key press/release logic faithfully replicates uionscreenkeyboard.cpp.
+//	Displays a touch-friendly paged Atari XL/XE keyboard.  The original
+//	photographic keyboard made all 62 keys too small on phones; this layout
+//	keeps the full Atari key set while splitting typing, punctuation, and
+//	editing controls across three views.
 
 #include <stdafx.h>
 #include <SDL3/SDL.h>
 #include <imgui.h>
+
+#include <vector>
 
 #include "ui_virtual_keyboard.h"
 #include "display_backend.h"
@@ -68,6 +72,38 @@ static bool s_controlSticky = false;
 static bool s_consoleStartHeld = false;
 static bool s_consoleSelectHeld = false;
 static bool s_consoleOptionHeld = false;
+
+// Mobile keyboard presentation state. Controller navigation is handled here
+// rather than by ImGui: gamepad events are intercepted before ImGui receives
+// them so that they cannot leak into the running emulation.
+enum class MobileAction : uint8_t {
+	Key, Shift, Control, Page, Placement, NativeText, Close
+};
+struct MobileKey {
+	const char *label;
+	const char *oskLabel;
+	MobileAction action;
+	uint8_t forcedModifiers;       // bit 0=Shift, bit 1=Control
+};
+struct MobileHit {
+	ImVec2 min;
+	ImVec2 max;
+	MobileKey key;
+};
+static std::vector<MobileHit> s_mobileHits;
+static int s_mobilePage = 0;     // 0=ABC, 1=symbols, 2=Atari/editing
+static int s_mobileFocus = -1;
+static int s_mobilePressedHit = -1;
+static int s_mobilePressedOSK = -1;
+static int s_mobileFirstConsole = 0;
+static int *s_mobilePlacement = nullptr;
+struct MobileTouchHold {
+	SDL_FingerID finger;
+	int oskIndex;
+	int hitIndex;
+	int page;
+};
+static std::vector<MobileTouchHold> s_mobileTouchHolds;
 
 // Previous-frame insets for display rect computation
 static float s_lastBottomInset = 0;
@@ -218,9 +254,11 @@ static void HandleModifierRelease(ATSimulator &sim, int index) {
 static void ReleaseStickyModifiers(ATSimulator &sim) {
 	ATPokeyEmulator &pokey = sim.GetPokey();
 
+	const bool hadStickyModifier = s_shiftSticky || s_controlSticky;
 	if (s_shiftSticky)   s_shiftSticky = false;
 	if (s_controlSticky) s_controlSticky = false;
-	ApplyModifierState(pokey);
+	if (hadStickyModifier)
+		ApplyModifierState(pokey);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +345,14 @@ static void ReleaseKey(ATSimulator &sim, int index) {
 }
 
 void ATUIVirtualKeyboard_ReleaseAll(ATSimulator &sim) {
+	for (const MobileTouchHold& hold : s_mobileTouchHolds) {
+		if (hold.oskIndex >= 0)
+			ReleaseKey(sim, hold.oskIndex);
+	}
+	if (!s_mobileTouchHolds.empty()) {
+		s_mobileTouchHolds.clear();
+		s_pressedKey = -1;
+	}
 	if (s_pressedKey >= 0) {
 		ReleaseKey(sim, s_pressedKey);
 		s_pressedKey = -1;
@@ -315,16 +361,17 @@ void ATUIVirtualKeyboard_ReleaseAll(ATSimulator &sim) {
 	ATPokeyEmulator &pokey = sim.GetPokey();
 	ATGTIAEmulator &gtia = sim.GetGTIA();
 
-	if (s_shiftHeld || s_shiftSticky) {
-		s_shiftHeld = false;
-		s_shiftSticky = false;
-		pokey.SetShiftKeyState(false, !g_kbdOpts.mbFullRawKeys);
-	}
-	if (s_controlHeld || s_controlSticky) {
-		s_controlHeld = false;
-		s_controlSticky = false;
-		pokey.SetControlKeyState(false);
-	}
+	// Clear both modifier axes through the same netplay-aware route used to
+	// acquire them. Directly clearing POKEY here left the replicated modifier
+	// state stuck on peers when focus was lost or the keyboard was closed.
+	const bool hadModifier = s_shiftHeld || s_shiftSticky
+		|| s_controlHeld || s_controlSticky;
+	s_shiftHeld = false;
+	s_shiftSticky = false;
+	s_controlHeld = false;
+	s_controlSticky = false;
+	if (hadModifier)
+		ApplyModifierState(pokey);
 	if (s_consoleStartHeld)  { ATNetplayInput::RouteConsoleSwitch(&gtia, 0x01, false); s_consoleStartHeld = false; }
 	if (s_consoleSelectHeld) { ATNetplayInput::RouteConsoleSwitch(&gtia, 0x02, false); s_consoleSelectHeld = false; }
 	if (s_consoleOptionHeld) { ATNetplayInput::RouteConsoleSwitch(&gtia, 0x04, false); s_consoleOptionHeld = false; }
@@ -346,6 +393,8 @@ void ATUIVirtualKeyboard_ReleaseAll(ATSimulator &sim) {
 	s_gamepadNavAxisX = 0;
 	s_gamepadNavAxisY = 0;
 	s_gamepadNavDir = -1;
+	s_mobilePressedHit = -1;
+	s_mobilePressedOSK = -1;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,8 +477,9 @@ static int ResolveAutoPlacement(int placement) {
 	GetUIWindowSize(winW, winH);
 	float aspect = (winH > 0) ? (float)winW / (float)winH : 1.6f;
 
-	// Wide windows: keyboard on the right; tall/square: bottom
-	return (aspect > 1.6f) ? kOSKPlacement_Right : kOSKPlacement_Bottom;
+	// Landscape windows put the keyboard on the right so the emulator keeps
+	// its vertical resolution. Portrait and near-square windows use bottom.
+	return (aspect > 1.15f) ? kOSKPlacement_Right : kOSKPlacement_Bottom;
 }
 
 static void ComputeKeyboardRect(int placement, ImVec2 *outPos, ImVec2 *outSize) {
@@ -535,6 +585,8 @@ static void ComputeKeyboardRect(int placement, ImVec2 *outPos, ImVec2 *outSize) 
 #endif
 }
 
+static void ComputeMobileKeyboardRect(int placement, ImVec2& pos, ImVec2& size);
+
 void ATUIVirtualKeyboard_GetDisplayInset(bool visible, int placement,
 	float *outBottom, float *outRight)
 {
@@ -547,7 +599,7 @@ void ATUIVirtualKeyboard_GetDisplayInset(bool visible, int placement,
 	}
 
 	ImVec2 pos, size;
-	ComputeKeyboardRect(placement, &pos, &size);
+	ComputeMobileKeyboardRect(placement, pos, size);
 
 	int winW, winH;
 	GetUIWindowSize(winW, winH);
@@ -702,7 +754,378 @@ static bool HitTestTextInputButton(ImVec2 point) {
 
 static bool s_wasVisible = false;
 
-bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int placement) {
+static int FindOSKKey(const char *label) {
+	for (int i = 0; i < kOSKKeyCount; ++i) {
+		if (!strcmp(kOSKKeys[i].label, label))
+			return i;
+	}
+	return -1;
+}
+
+static void ComputeMobileKeyboardRect(int placement, ImVec2& pos, ImVec2& size) {
+	int winW, winH;
+	GetUIWindowSize(winW, winH);
+	const int resolved = ResolveAutoPlacement(placement);
+	float insetL = 0, insetT = 0, insetR = 0, insetB = 0;
+#ifdef __ANDROID__
+	const ATSafeInsets insets = ATAndroid_GetSafeInsets();
+	insetL = (float)insets.left;
+	insetT = (float)insets.top;
+	insetR = (float)insets.right;
+	insetB = (float)insets.bottom;
+#endif
+	const float top = g_menuBarHeight + insetT;
+	const float availW = (float)winW - insetL - insetR;
+	const float availH = (float)winH - top - insetB;
+
+	if (resolved == kOSKPlacement_Right) {
+		size.x = availW * 0.48f;
+		if (size.x < 420.0f) size.x = std::min(availW, 420.0f);
+		if (size.x > 680.0f) size.x = 680.0f;
+		size.y = availH;
+		pos.x = (float)winW - insetR - size.x;
+		pos.y = top;
+	} else {
+		size.x = availW;
+		size.y = availH * 0.58f;
+		if (size.y > 480.0f) size.y = 480.0f;
+		if (size.y < 300.0f) size.y = std::min(availH, 300.0f);
+		pos.x = insetL;
+		pos.y = (float)winH - insetB - size.y;
+	}
+}
+
+static void MobileApplyForcedModifiers(ATSimulator& sim, uint8_t modifiers) {
+	if (!modifiers)
+		return;
+	if (modifiers & 1) s_shiftSticky = true;
+	if (modifiers & 2) s_controlSticky = true;
+	ApplyModifierState(sim.GetPokey());
+}
+
+static void MobilePressKey(ATSimulator& sim, int hitIndex) {
+	if (s_mobilePressedOSK >= 0)
+		return;
+	if (hitIndex < 0 || hitIndex >= (int)s_mobileHits.size())
+		return;
+	const MobileKey& key = s_mobileHits[hitIndex].key;
+	if (key.action != MobileAction::Key)
+		return;
+	const int osk = FindOSKKey(key.oskLabel);
+	if (osk < 0)
+		return;
+
+	s_mobilePressedHit = hitIndex;
+	s_mobilePressedOSK = osk;
+	MobileApplyForcedModifiers(sim, key.forcedModifiers);
+	PressKey(sim, osk);
+}
+
+static void MobileReleaseKey(ATSimulator& sim) {
+	if (s_mobilePressedOSK >= 0)
+		ReleaseKey(sim, s_mobilePressedOSK);
+	s_mobilePressedHit = -1;
+	s_mobilePressedOSK = -1;
+}
+
+static void MobileActivateAction(ATSimulator& sim, int hitIndex) {
+	if (hitIndex < 0 || hitIndex >= (int)s_mobileHits.size())
+		return;
+	const MobileKey& key = s_mobileHits[hitIndex].key;
+	switch (key.action) {
+		case MobileAction::Key:
+			MobilePressKey(sim, hitIndex);
+			break;
+		case MobileAction::Shift: {
+			const int osk = FindOSKKey("LSHIFT");
+			if (osk >= 0) {
+				HandleModifierPress(sim, osk);
+				HandleModifierRelease(sim, osk);
+			}
+			break;
+		}
+		case MobileAction::Control: {
+			const int osk = FindOSKKey("CONTROL");
+			if (osk >= 0) {
+				HandleModifierPress(sim, osk);
+				HandleModifierRelease(sim, osk);
+			}
+			break;
+		}
+		case MobileAction::Page:
+			s_mobilePage = (s_mobilePage + 1) % 3;
+			s_mobileFocus = -1;
+			break;
+		case MobileAction::Placement:
+			if (s_mobilePlacement)
+				*s_mobilePlacement = (*s_mobilePlacement + 1) % 3;
+			break;
+		case MobileAction::NativeText:
+			s_nativeTextInputActive = !s_nativeTextInputActive;
+#ifdef __ANDROID__
+			if (s_nativeTextInputActive)
+				SDL_StartTextInput(g_pWindow);
+			else
+				SDL_StopTextInput(g_pWindow);
+#endif
+			break;
+		case MobileAction::Close:
+			s_closeRequested = true;
+			break;
+	}
+}
+
+static ImU32 MobileKeyColor(const MobileKey& key, bool focused, bool pressed) {
+	if (pressed) return IM_COL32(221, 91, 42, 255);
+	if ((key.action == MobileAction::Shift && IsShiftActive())
+		|| (key.action == MobileAction::Control && IsControlActive()))
+		return IM_COL32(190, 76, 34, 255);
+	if (key.action == MobileAction::Page) return IM_COL32(76, 49, 43, 255);
+	if (key.action == MobileAction::Placement) return IM_COL32(47, 63, 82, 255);
+	if (key.action == MobileAction::NativeText && s_nativeTextInputActive)
+		return IM_COL32(43, 112, 62, 255);
+	if (key.action == MobileAction::Close) return IM_COL32(65, 67, 76, 255);
+	if (focused) return IM_COL32(62, 72, 88, 255);
+	return IM_COL32(49, 52, 62, 255);
+}
+
+static void MobileDrawKey(const MobileKey& key, float width, float height) {
+	const ImVec2 min = ImGui::GetCursorScreenPos();
+	const ImVec2 max(min.x + width, min.y + height);
+	const int index = (int)s_mobileHits.size();
+	const bool focused = index == s_mobileFocus;
+	bool pressed = index == s_mobilePressedHit;
+	for (const MobileTouchHold& hold : s_mobileTouchHolds) {
+		if (hold.page == s_mobilePage && hold.hitIndex == index) {
+			pressed = true;
+			break;
+		}
+	}
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const float rounding = std::min(9.0f, height * 0.16f);
+	dl->AddRectFilled(min, max, MobileKeyColor(key, focused, pressed), rounding);
+	dl->AddRect(min, max, focused ? IM_COL32(0, 200, 255, 255)
+		: IM_COL32(74, 78, 91, 255), rounding, 0, focused ? 2.0f : 1.0f);
+	const ImVec2 ts = ImGui::CalcTextSize(key.label);
+	dl->AddText(ImVec2(min.x + (width - ts.x) * 0.5f,
+		min.y + (height - ts.y) * 0.5f), IM_COL32_WHITE, key.label);
+	ImGui::PushID(index);
+	ImGui::InvisibleButton("##osk", ImVec2(width, height));
+	ImGui::PopID();
+	s_mobileHits.push_back({min, max, key});
+}
+
+static void MobileDrawRow(const MobileKey* keys, const float* weights, int count,
+	float width, float height, float gap)
+{
+	float totalWeight = 0;
+	for (int i = 0; i < count; ++i) totalWeight += weights ? weights[i] : 1.0f;
+	const float unit = (width - gap * (count - 1)) / totalWeight;
+	for (int i = 0; i < count; ++i) {
+		if (i) ImGui::SameLine(0, gap);
+		MobileDrawKey(keys[i], unit * (weights ? weights[i] : 1.0f), height);
+	}
+}
+
+#define MK(lbl, osk) { lbl, osk, MobileAction::Key, 0 }
+#define MKS(lbl, osk) { lbl, osk, MobileAction::Key, 1 }
+#define MKC(lbl, osk) { lbl, osk, MobileAction::Key, 2 }
+
+bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int& placement) {
+	s_mobilePlacement = &placement;
+	if (s_wasVisible && !visible)
+		ATUIVirtualKeyboard_ReleaseAll(sim);
+	s_wasVisible = visible;
+	s_lastVisible = visible;
+	if (!visible) return false;
+
+	ImVec2 panelPos, panelSize;
+	ComputeMobileKeyboardRect(placement, panelPos, panelSize);
+	ImGui::SetNextWindowPos(panelPos);
+	ImGui::SetNextWindowSize(panelSize);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7, 7));
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 5));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.13f, 1));
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar
+		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+		| ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings
+		| ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	if (!ImGui::Begin("##VirtualKeyboardMobile", nullptr, flags)) {
+		ImGui::End();
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(2);
+		return false;
+	}
+
+	s_mobileHits.clear();
+	const float gap = 5.0f;
+	const float width = ImGui::GetContentRegionAvail().x;
+	const float availableH = ImGui::GetContentRegionAvail().y;
+	const int bodyRows = s_mobilePage == 0 ? 5 : (s_mobilePage == 1 ? 4 : 3);
+	const int totalRows = bodyRows + 2; // console + persistent navigation
+	const float rowUnits = (float)totalRows + (s_mobilePage == 2 ? 0.35f : 0.0f);
+	float keyH = (availableH - 24.0f - gap * totalRows) / rowUnits;
+	if (keyH > 54.0f) keyH = 54.0f;
+	if (keyH < 24.0f) keyH = 24.0f;
+	float contentH = 24.0f + keyH * totalRows + gap * totalRows;
+	if (s_mobilePage == 2)
+		contentH += keyH * 0.35f;
+	if (availableH > contentH)
+		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
+			+ (availableH - contentH) * 0.5f);
+
+	const char* caption = s_mobilePage == 0 ? "ABC"
+		: s_mobilePage == 1 ? "SYMBOLS" : "ATARI / EDIT";
+	ImGui::TextDisabled("%s", caption);
+#ifdef __ANDROID__
+	const float toolbarW = 172.0f;
+#else
+	const float toolbarW = 109.0f;
+#endif
+	ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - toolbarW);
+	const char* placementLabel = placement == kOSKPlacement_Auto ? "AUTO"
+		: placement == kOSKPlacement_Bottom ? "BOTTOM" : "RIGHT";
+	const MobileKey placementKey = {
+		placementLabel, nullptr, MobileAction::Placement, 0
+	};
+	MobileDrawKey(placementKey, 52.0f, 22.0f);
+#ifdef __ANDROID__
+	ImGui::SameLine(0, 5.0f);
+	const MobileKey nativeKey = {"PHONE", nullptr, MobileAction::NativeText, 0};
+	MobileDrawKey(nativeKey, 58.0f, 22.0f);
+#endif
+	ImGui::SameLine(0, 5.0f);
+	const MobileKey closeKey = {"CLOSE", nullptr, MobileAction::Close, 0};
+	MobileDrawKey(closeKey, 52.0f, 22.0f);
+	ImGui::NewLine();
+
+	static const MobileKey console[] = {
+		MK("HELP", "HELP"), MK("START", "START"), MK("SELECT", "SELECT"),
+		MK("OPTION", "OPTION"), MK("RESET", "RESET")
+	};
+	s_mobileFirstConsole = (int)s_mobileHits.size();
+	MobileDrawRow(console, nullptr, 5, width, keyH, gap);
+
+	if (s_mobilePage == 0) {
+		static const MobileKey nums[] = {
+			MK("1", "1"), MK("2", "2"), MK("3", "3"), MK("4", "4"),
+			MK("5", "5"), MK("6", "6"), MK("7", "7"), MK("8", "8"),
+			MK("9", "9"), MK("0", "0")
+		};
+		static const MobileKey qwerty[] = {
+			MK("Q", "Q"), MK("W", "W"), MK("E", "E"), MK("R", "R"),
+			MK("T", "T"), MK("Y", "Y"), MK("U", "U"), MK("I", "I"),
+			MK("O", "O"), MK("P", "P")
+		};
+		static const MobileKey home[] = {
+			MK("A", "A"), MK("S", "S"), MK("D", "D"), MK("F", "F"),
+			MK("G", "G"), MK("H", "H"), MK("J", "J"), MK("K", "K"),
+			MK("L", "L"), MK("RETURN", "RETURN")
+		};
+		static const float homeW[] = {1,1,1,1,1,1,1,1,1,1.8f};
+		static const MobileKey lower[] = {
+			{"SHIFT", "LSHIFT", MobileAction::Shift, 0},
+			MK("Z", "Z"), MK("X", "X"), MK("C", "C"), MK("V", "V"),
+			MK("B", "B"), MK("N", "N"), MK("M", "M"),
+			MK("BK SP", "DELETE")
+		};
+		static const float lowerW[] = {1.3f,1,1,1,1,1,1,1,1.7f};
+		static const MobileKey footer[] = {
+			MK(".", "PERIOD"), MKS(":", "COLON"), MK("SPACE", "SPACE")
+		};
+		static const float footerW[] = {1,1,5};
+		MobileDrawRow(nums,nullptr,10,width,keyH,gap);
+		MobileDrawRow(qwerty,nullptr,10,width,keyH,gap);
+		MobileDrawRow(home,homeW,10,width,keyH,gap);
+		MobileDrawRow(lower,lowerW,9,width,keyH,gap);
+		MobileDrawRow(footer,footerW,3,width,keyH,gap);
+	} else if (s_mobilePage == 1) {
+		static const MobileKey r1[] = {
+			MKS("!", "1"), MKS("\"", "2"), MKS("#", "3"), MKS("$", "4"),
+			MKS("%", "5"), MKS("&", "6"), MKS("'", "7"), MKS("@", "8")
+		};
+		static const MobileKey r2[] = {
+			MKS("(", "9"), MKS(")", "0"), MKS("[", "COMMA"),
+			MKS("]", "PERIOD"), MKS("?", "SLASH"), MKS("\\", "LEFT"),
+			MKS("^", "RIGHT"), MKS("_", "UP")
+		};
+		static const MobileKey r3[] = {
+			MK("+", "LEFT"), MK("*", "RIGHT"), MK("-", "UP"),
+			MK("=", "DOWN"), MKS("|", "DOWN"), MK("/", "SLASH"),
+			MK(",", "COMMA"), MK(";", "COLON")
+		};
+		static const MobileKey r4[] = {
+			MK("<", "CLEAR"), MK(">", "INSERT"), MK(".", "PERIOD"),
+			MKS(":", "COLON")
+		};
+		MobileDrawRow(r1,nullptr,8,width,keyH,gap);
+		MobileDrawRow(r2,nullptr,8,width,keyH,gap);
+		MobileDrawRow(r3,nullptr,8,width,keyH,gap);
+		MobileDrawRow(r4,nullptr,4,width,keyH,gap);
+	} else {
+		static const MobileKey r1[] = {
+			MK("ESC", "ESC"), MK("TAB", "TAB"), MK("CAPS", "CAPS"),
+			MK("BREAK", "BREAK"), MK("FUJI", "INV")
+		};
+		static const MobileKey r2[] = {
+			MK("<\nSHIFT: CLEAR","CLEAR"),
+			MK(">\nSHIFT: INS LINE\nCTRL: INS CHAR","INSERT"),
+			MK("BK SP\nSHIFT: DEL LINE\nCTRL: DEL CHAR","DELETE")
+		};
+		static const MobileKey r3[] = {
+			{"SHIFT", "LSHIFT", MobileAction::Shift, 0},
+			{"CTRL", "CONTROL", MobileAction::Control, 0},
+			MK("SPACE", "SPACE"), MK("RETURN", "RETURN")
+		};
+		static const float r3w[] = {1.25f,1.25f,3.5f,1.6f};
+		MobileDrawRow(r1,nullptr,5,width,keyH,gap);
+		MobileDrawRow(r2,nullptr,3,width,keyH * 1.35f,gap);
+		MobileDrawRow(r3,r3w,4,width,keyH,gap);
+	}
+
+	static const MobileKey nav[] = {
+		{"PAGE",nullptr,MobileAction::Page,0}, MKC("LEFT","LEFT"),
+		MKC("UP","UP"), MKC("DOWN","DOWN"), MKC("RIGHT","RIGHT")
+	};
+	MobileKey navKeys[5];
+	memcpy(navKeys, nav, sizeof(navKeys));
+	navKeys[0].label = s_mobilePage == 0 ? "#+=" : s_mobilePage == 1 ? "ATARI" : "ABC";
+	MobileDrawRow(navKeys,nullptr,5,width,keyH,gap);
+
+	if (s_mobileFocus < 0 || s_mobileFocus >= (int)s_mobileHits.size())
+		s_mobileFocus = s_mobileFirstConsole;
+
+	// Mouse events arrive through ImGui. Touch is handled from raw SDL finger
+	// events below to avoid SDL's synthetic mouse event firing a key twice.
+	if (ImGui::GetIO().MouseSource != ImGuiMouseSource_TouchScreen) {
+		for (int i = 0; i < (int)s_mobileHits.size(); ++i) {
+			const MobileHit& hit = s_mobileHits[i];
+			const ImVec2 mouse = ImGui::GetMousePos();
+			if (mouse.x < hit.min.x || mouse.x >= hit.max.x
+				|| mouse.y < hit.min.y || mouse.y >= hit.max.y)
+				continue;
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+				s_mobileFocus = i;
+				if (hit.key.action == MobileAction::Key) MobilePressKey(sim, i);
+				else MobileActivateAction(sim, i);
+			}
+		}
+		if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) MobileReleaseKey(sim);
+	}
+
+	ImGui::End();
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar(2);
+	const bool closeRequested = s_closeRequested;
+	s_closeRequested = false;
+	return closeRequested;
+}
+
+#undef MK
+#undef MKS
+#undef MKC
+
+static bool ATUIRenderVirtualKeyboardLegacy(ATSimulator &sim, bool visible, int placement) {
 	// Release all keys when keyboard is hidden (e.g. via menu toggle)
 	if (s_wasVisible && !visible)
 		ATUIVirtualKeyboard_ReleaseAll(sim);
@@ -974,7 +1397,200 @@ bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int placement) {
 // ---------------------------------------------------------------------------
 // Event handling (gamepad + touch)
 // ---------------------------------------------------------------------------
+static int MobileHitTest(float x, float y) {
+	for (int i = 0; i < (int)s_mobileHits.size(); ++i) {
+		const MobileHit& hit = s_mobileHits[i];
+		if (x >= hit.min.x && x < hit.max.x && y >= hit.min.y && y < hit.max.y)
+			return i;
+	}
+	return -1;
+}
+
+static bool MobileMoveFocus(int dir) {
+	if (s_mobileHits.empty())
+		return true;
+	if (s_mobileFocus < 0 || s_mobileFocus >= (int)s_mobileHits.size()) {
+		s_mobileFocus = 0;
+		return true;
+	}
+	const MobileHit& from = s_mobileHits[s_mobileFocus];
+	const float fx = (from.min.x + from.max.x) * 0.5f;
+	const float fy = (from.min.y + from.max.y) * 0.5f;
+	int best = -1;
+	float bestScore = FLT_MAX;
+	for (int i = 0; i < (int)s_mobileHits.size(); ++i) {
+		if (i == s_mobileFocus) continue;
+		const MobileHit& to = s_mobileHits[i];
+		const float dx = (to.min.x + to.max.x) * 0.5f - fx;
+		const float dy = (to.min.y + to.max.y) * 0.5f - fy;
+		if ((dir == 0 && dx >= -1) || (dir == 1 && dx <= 1)
+			|| (dir == 2 && dy >= -1) || (dir == 3 && dy <= 1))
+			continue;
+		const float primary = dir < 2 ? fabsf(dx) : fabsf(dy);
+		const float cross = dir < 2 ? fabsf(dy) : fabsf(dx);
+		const float score = primary + cross * 2.5f;
+		if (score < bestScore) { bestScore = score; best = i; }
+	}
+	if (best >= 0) s_mobileFocus = best;
+	return true;
+}
+
 bool ATUIVirtualKeyboard_HandleEvent(const SDL_Event &ev, ATSimulator &sim, bool visible) {
+	if (!visible)
+		return false;
+
+	// Physical keyboard navigation is useful in Desktop Mode and on TV-style
+	// systems with a wireless keyboard. Keep ordinary typing keys routed to the
+	// Atari; only conventional UI navigation keys are intercepted here.
+	if (ev.type == SDL_EVENT_KEY_DOWN) {
+		switch (ev.key.key) {
+			case SDLK_LEFT:  return MobileMoveFocus(0);
+			case SDLK_RIGHT: return MobileMoveFocus(1);
+			case SDLK_UP:    return MobileMoveFocus(2);
+			case SDLK_DOWN:  return MobileMoveFocus(3);
+			case SDLK_RETURN:
+			case SDLK_KP_ENTER:
+				if (!ev.key.repeat && s_mobileFocus >= 0
+					&& s_mobileFocus < (int)s_mobileHits.size())
+					MobileActivateAction(sim, s_mobileFocus);
+				return true;
+			case SDLK_PAGEUP:
+				if (!ev.key.repeat) {
+					s_mobilePage = (s_mobilePage + 2) % 3;
+					s_mobileFocus = -1;
+				}
+				return true;
+			case SDLK_PAGEDOWN:
+				if (!ev.key.repeat) {
+					s_mobilePage = (s_mobilePage + 1) % 3;
+					s_mobileFocus = -1;
+				}
+				return true;
+			case SDLK_ESCAPE:
+				s_closeRequested = true;
+				return true;
+			default:
+				break;
+		}
+	}
+	if (ev.type == SDL_EVENT_KEY_UP) {
+		switch (ev.key.key) {
+			case SDLK_RETURN:
+			case SDLK_KP_ENTER:
+				MobileReleaseKey(sim);
+				return true;
+			case SDLK_LEFT:
+			case SDLK_RIGHT:
+			case SDLK_UP:
+			case SDLK_DOWN:
+			case SDLK_PAGEUP:
+			case SDLK_PAGEDOWN:
+			case SDLK_ESCAPE:
+				return true;
+			default:
+				break;
+		}
+	}
+
+	if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+		switch (ev.gbutton.button) {
+			case SDL_GAMEPAD_BUTTON_DPAD_LEFT:  return MobileMoveFocus(0);
+			case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return MobileMoveFocus(1);
+			case SDL_GAMEPAD_BUTTON_DPAD_UP:    return MobileMoveFocus(2);
+			case SDL_GAMEPAD_BUTTON_DPAD_DOWN:  return MobileMoveFocus(3);
+			case SDL_GAMEPAD_BUTTON_SOUTH:
+				if (s_mobileFocus >= 0 && s_mobileFocus < (int)s_mobileHits.size())
+					MobileActivateAction(sim, s_mobileFocus);
+				return true;
+			case SDL_GAMEPAD_BUTTON_WEST:
+				s_mobilePage = (s_mobilePage + 1) % 3;
+				s_mobileFocus = -1;
+				return true;
+			case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
+				s_shiftHeld = true;
+				ApplyModifierState(sim.GetPokey());
+				return true;
+			case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+				s_controlHeld = true;
+				ApplyModifierState(sim.GetPokey());
+				return true;
+			default: break;
+		}
+	}
+	if (ev.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+		switch (ev.gbutton.button) {
+			case SDL_GAMEPAD_BUTTON_SOUTH:
+				MobileReleaseKey(sim);
+				return true;
+			case SDL_GAMEPAD_BUTTON_WEST:
+				return true;
+			case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER:
+				s_shiftHeld = false;
+				ApplyModifierState(sim.GetPokey());
+				return true;
+			case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+				s_controlHeld = false;
+				ApplyModifierState(sim.GetPokey());
+				return true;
+			default: break;
+		}
+	}
+	if (ev.type == SDL_EVENT_GAMEPAD_AXIS_MOTION
+		&& (ev.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX
+			|| ev.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)) {
+		if (ev.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX) s_gamepadNavAxisX = ev.gaxis.value;
+		else s_gamepadNavAxisY = ev.gaxis.value;
+		constexpr int threshold = 18000;
+		int dir = -1;
+		if (abs(s_gamepadNavAxisX) > threshold || abs(s_gamepadNavAxisY) > threshold) {
+			if (abs(s_gamepadNavAxisX) >= abs(s_gamepadNavAxisY)) dir = s_gamepadNavAxisX < 0 ? 0 : 1;
+			else dir = s_gamepadNavAxisY < 0 ? 2 : 3;
+		}
+		if (dir != s_gamepadNavDir) {
+			s_gamepadNavDir = dir;
+			if (dir >= 0) MobileMoveFocus(dir);
+		}
+		return dir >= 0;
+	}
+
+	if (ev.type == SDL_EVENT_FINGER_DOWN && s_lastVisible) {
+		int winW, winH;
+		GetUIWindowSize(winW, winH);
+		const int hit = MobileHitTest(ev.tfinger.x * winW, ev.tfinger.y * winH);
+		if (hit >= 0) {
+			s_mobileFocus = hit;
+			const MobileKey& key = s_mobileHits[hit].key;
+			if (key.action == MobileAction::Key) {
+				const int osk = FindOSKKey(key.oskLabel);
+				if (osk >= 0) {
+					MobileApplyForcedModifiers(sim, key.forcedModifiers);
+					PressKey(sim, osk);
+					s_mobileTouchHolds.push_back({
+						ev.tfinger.fingerID, osk, hit, s_mobilePage
+					});
+				}
+			} else {
+				MobileActivateAction(sim, hit);
+			}
+			return true;
+		}
+	}
+	if (ev.type == SDL_EVENT_FINGER_UP || ev.type == SDL_EVENT_FINGER_CANCELED) {
+		for (auto it = s_mobileTouchHolds.begin();
+			it != s_mobileTouchHolds.end(); ++it)
+		{
+			if (it->finger != ev.tfinger.fingerID)
+				continue;
+			if (it->oskIndex >= 0)
+				ReleaseKey(sim, it->oskIndex);
+			s_mobileTouchHolds.erase(it);
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool ATUIVirtualKeyboard_HandleEventLegacy(const SDL_Event &ev, ATSimulator &sim, bool visible) {
 	if (!visible)
 		return false;
 

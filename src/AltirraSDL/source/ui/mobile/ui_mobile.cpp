@@ -899,6 +899,20 @@ void ATMobileUI_Render(ATSimulator &sim, ATUIState &uiState,
 		mobileState.currentScreen = ATMobileUIScreen::FirstRunWizard;
 	}
 
+	// The Atari virtual keyboard writes to POKEY/GTIA; it is not an ImGui
+	// text-entry keyboard. Never carry it onto Game Library, Search, Details,
+	// File Browser, Settings, or another Gaming Mode screen where it would
+	// cover UI without entering text. Those screens use SDL/ImGui text input,
+	// which opens the platform keyboard on mobile. The hamburger can still
+	// enable the Atari keyboard: that action closes the menu and returns to
+	// the emulation canvas later in this same frame.
+	if (mobileState.currentScreen != ATMobileUIScreen::None
+		&& uiState.showVirtualKeyboard)
+	{
+		ATUIVirtualKeyboard_ReleaseAll(sim);
+		uiState.showVirtualKeyboard = false;
+	}
+
 	// Check for menu button tap
 	if (ConsumeMenuTap() && mobileState.currentScreen == ATMobileUIScreen::None)
 		ATMobileUI_OpenMenu(sim, mobileState);

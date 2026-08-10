@@ -2287,6 +2287,13 @@ void ATUIRenderFrame(ATSimulator &sim, VDVideoDisplaySDL3 &display,
 	ATUIDebuggerRenderSourceListDialog();
 
 	// Virtual on-screen keyboard
+	// The Game Library owns keyboard focus for filtering and metadata UI.
+	// The Atari keyboard cannot type into ImGui fields, so close it instead
+	// of allowing its panel to cover the library while sending keys to POKEY.
+	if (state.showVirtualKeyboard && state.showGameLibrary) {
+		ATUIVirtualKeyboard_ReleaseAll(sim);
+		state.showVirtualKeyboard = false;
+	}
 	if (ATUIRenderVirtualKeyboard(sim, state.showVirtualKeyboard, state.oskPlacement)) {
 		ATUIVirtualKeyboard_ReleaseAll(sim);
 		state.showVirtualKeyboard = false;

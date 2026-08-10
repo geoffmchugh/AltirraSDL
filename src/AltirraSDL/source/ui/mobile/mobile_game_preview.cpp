@@ -412,9 +412,11 @@ void GamePreview_Render(ATSimulator &sim, ATMobileUIState &mobileState,
 		const float availH = ImGui::GetContentRegionAvail().y;
 		const float availW = ImGui::GetContentRegionAvail().x;
 
-		// Compact: a phone held upright.  Everything optional is dropped
-		// so that the things that are not — the artwork, the title and
-		// Play — stay full size and finger-sized.
+		// Compact: a phone held upright.  Secondary fact lines and the art
+		// switch are dropped so that the artwork, title and actions stay
+		// full size and finger-sized.  Keep the synopsis: the text column
+		// is already a scroll view, and omitting it leaves otherwise useful
+		// space blank between the title/facts and the actions.
 		const bool compact = (availW < dp(kCompactBodyW))
 			|| (availH < dp(kCompactBodyH));
 
@@ -449,7 +451,7 @@ void GamePreview_Render(ATSimulator &sim, ATMobileUIState &mobileState,
 		ImGui::BeginChild("##previewText", ImVec2(textW, -footerH),
 			ImGuiChildFlags_None, ImGuiWindowFlags_NoNav);
 		ATTouchDragScroll();
-		DrawText(entry, pal, /*includeSynopsis=*/!compact, compact);
+		DrawText(entry, pal, /*includeSynopsis=*/true, compact);
 		ATTouchEndDragScroll();
 		ImGui::EndChild();
 
