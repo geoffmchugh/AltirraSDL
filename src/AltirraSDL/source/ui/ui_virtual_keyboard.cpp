@@ -777,19 +777,34 @@ static void ComputeMobileKeyboardRect(int placement, ImVec2& pos, ImVec2& size) 
 	const float top = g_menuBarHeight + insetT;
 	const float availW = (float)winW - insetL - insetR;
 	const float availH = (float)winH - top - insetB;
+	const float fontH = ImGui::GetFontSize();
 
 	if (resolved == kOSKPlacement_Right) {
 		size.x = availW * 0.48f;
-		if (size.x < 420.0f) size.x = std::min(availW, 420.0f);
-		if (size.x > 680.0f) size.x = 680.0f;
+		const float minW = std::max(420.0f, fontH * 12.0f);
+		const float maxW = std::max(680.0f, fontH * 24.0f);
+		if (size.x < minW) size.x = std::min(availW, minW);
+		if (size.x > maxW) size.x = maxW;
 		size.y = availH;
 		pos.x = (float)winW - insetR - size.x;
 		pos.y = top;
 	} else {
 		size.x = availW;
-		size.y = availH * 0.58f;
-		if (size.y > 480.0f) size.y = 480.0f;
-		if (size.y < 300.0f) size.y = std::min(availH, 300.0f);
+
+		// Size from the widest (ABC) page rather than from a fixed pixel cap.
+		// Ten normal keys define the nominal square-key size; the remaining
+		// height is the title, toolbar, row gaps, and window padding.
+		const float pad = std::max(6.0f, fontH * 0.35f);
+		const float gap = std::max(4.0f, fontH * 0.25f);
+		const float contentW = std::max(1.0f, availW - pad * 2.0f);
+		const float keyW = std::max(1.0f,
+			(contentW - gap * 9.0f) / 10.0f);
+		const float keyH = std::max(keyW * 0.92f, fontH * 2.0f);
+		const float headerH = fontH * 1.35f;
+		const float toolbarH = std::max(fontH * 2.1f, keyH * 0.82f);
+		const float desiredH = pad * 2.0f + headerH + toolbarH
+			+ keyH * 7.0f + gap * 9.0f;
+		size.y = std::min(availH * 0.78f, desiredH);
 		pos.x = insetL;
 		pos.y = (float)winH - insetB - size.y;
 	}
@@ -902,10 +917,13 @@ static void MobileDrawKey(const MobileKey& key, float width, float height) {
 		}
 	}
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	const float rounding = std::min(9.0f, height * 0.16f);
+	const float fontH = ImGui::GetFontSize();
+	const float rounding = std::min(fontH * 0.55f, height * 0.18f);
+	const float border = std::max(1.0f, fontH / 18.0f);
 	dl->AddRectFilled(min, max, MobileKeyColor(key, focused, pressed), rounding);
 	dl->AddRect(min, max, focused ? IM_COL32(0, 200, 255, 255)
-		: IM_COL32(74, 78, 91, 255), rounding, 0, focused ? 2.0f : 1.0f);
+		: IM_COL32(74, 78, 91, 255), rounding, 0,
+		focused ? border * 2.0f : border);
 	const ImVec2 ts = ImGui::CalcTextSize(key.label);
 	dl->AddText(ImVec2(min.x + (width - ts.x) * 0.5f,
 		min.y + (height - ts.y) * 0.5f), IM_COL32_WHITE, key.label);
@@ -941,10 +959,14 @@ bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int& placement) {
 
 	ImVec2 panelPos, panelSize;
 	ComputeMobileKeyboardRect(placement, panelPos, panelSize);
+	const float fontH = ImGui::GetFontSize();
+	const float padding = std::max(6.0f, fontH * 0.35f);
+	const float gap = std::max(4.0f, fontH * 0.25f);
 	ImGui::SetNextWindowPos(panelPos);
 	ImGui::SetNextWindowSize(panelSize);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7, 7));
-	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 5));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+		ImVec2(padding, padding));
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.13f, 1));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
@@ -958,18 +980,21 @@ bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int& placement) {
 	}
 
 	s_mobileHits.clear();
-	const float gap = 5.0f;
 	const float width = ImGui::GetContentRegionAvail().x;
 	const float availableH = ImGui::GetContentRegionAvail().y;
 	const int bodyRows = s_mobilePage == 0 ? 5 : (s_mobilePage == 1 ? 4 : 3);
 	const int totalRows = bodyRows + 2; // console + persistent navigation
 	const float rowUnits = (float)totalRows + (s_mobilePage == 2 ? 0.35f : 0.0f);
-	float keyH = (availableH - 24.0f - gap * totalRows) / rowUnits;
-	if (keyH > 54.0f) keyH = 54.0f;
-	if (keyH < 24.0f) keyH = 24.0f;
-	float contentH = 24.0f + keyH * totalRows + gap * totalRows;
-	if (s_mobilePage == 2)
-		contentH += keyH * 0.35f;
+	const float nominalKeyW = std::max(1.0f,
+		(width - gap * 9.0f) / 10.0f);
+	const float toolbarH = std::max(fontH * 2.1f, nominalKeyW * 0.82f);
+	const float verticalGaps = gap * (totalRows + 1);
+	const float keyBudget = std::max(1.0f,
+		(availableH - fontH - toolbarH - verticalGaps) / rowUnits);
+	const float desiredKeyH = std::max(nominalKeyW * 0.92f, fontH * 2.0f);
+	const float keyH = std::min(desiredKeyH, keyBudget);
+	const float contentH = fontH + toolbarH + keyH * rowUnits
+		+ verticalGaps;
 	if (availableH > contentH)
 		ImGui::SetCursorPosY(ImGui::GetCursorPosY()
 			+ (availableH - contentH) * 0.5f);
@@ -977,27 +1002,22 @@ bool ATUIRenderVirtualKeyboard(ATSimulator &sim, bool visible, int& placement) {
 	const char* caption = s_mobilePage == 0 ? "ABC"
 		: s_mobilePage == 1 ? "SYMBOLS" : "ATARI / EDIT";
 	ImGui::TextDisabled("%s", caption);
-#ifdef __ANDROID__
-	const float toolbarW = 172.0f;
-#else
-	const float toolbarW = 109.0f;
-#endif
-	ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - toolbarW);
 	const char* placementLabel = placement == kOSKPlacement_Auto ? "AUTO"
 		: placement == kOSKPlacement_Bottom ? "BOTTOM" : "RIGHT";
-	const MobileKey placementKey = {
-		placementLabel, nullptr, MobileAction::Placement, 0
-	};
-	MobileDrawKey(placementKey, 52.0f, 22.0f);
 #ifdef __ANDROID__
-	ImGui::SameLine(0, 5.0f);
-	const MobileKey nativeKey = {"PHONE", nullptr, MobileAction::NativeText, 0};
-	MobileDrawKey(nativeKey, 58.0f, 22.0f);
+	const MobileKey toolbar[] = {
+		{placementLabel, nullptr, MobileAction::Placement, 0},
+		{"PHONE", nullptr, MobileAction::NativeText, 0},
+		{"CLOSE", nullptr, MobileAction::Close, 0}
+	};
+	MobileDrawRow(toolbar, nullptr, 3, width, toolbarH, gap);
+#else
+	const MobileKey toolbar[] = {
+		{placementLabel, nullptr, MobileAction::Placement, 0},
+		{"CLOSE", nullptr, MobileAction::Close, 0}
+	};
+	MobileDrawRow(toolbar, nullptr, 2, width, toolbarH, gap);
 #endif
-	ImGui::SameLine(0, 5.0f);
-	const MobileKey closeKey = {"CLOSE", nullptr, MobileAction::Close, 0};
-	MobileDrawKey(closeKey, 52.0f, 22.0f);
-	ImGui::NewLine();
 
 	static const MobileKey console[] = {
 		MK("HELP", "HELP"), MK("START", "START"), MK("SELECT", "SELECT"),
