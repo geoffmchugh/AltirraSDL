@@ -51,6 +51,7 @@ extern "C" bool ATWasmBrokerIsActive();
 #include "uiqueue.h"
 
 #include "crash_report.h"
+#include "macos_leak_debug.h"
 #include <imgui.h>
 #include "display_sdl3_impl.h"
 #include "display_backend.h"
@@ -173,6 +174,9 @@ static ATPacingMode g_pacingMode = ATPacingMode::Auto;
 // simulator tick are both skipped so we do not touch a dead EGL surface
 // and do not burn battery while the user cannot see us.
 static bool g_appSuspended = false;
+// MACLEAK DEBUG: true only between PrepareFrame consuming a new emulator
+// frame and the next RenderAndPresent upload decision. See MAC_OS_LEAK_DEBUG.md.
+static bool g_macLeakNewFrame = false;
 ATUIState g_uiState;
 
 static bool ATParsePacingMode(const char *value, ATPacingMode& out) {
@@ -1387,17 +1391,20 @@ static void RenderAndPresent() {
 	// error paths).
 	if (g_appSuspended || !g_pWindow || !g_pBackend)
 		return;
+	ATMacLeakDebugOnRender();
 
 	g_pBackend->BeginFrame();
 
 	// Upload frame pixels to the backend
 	const void *pixels = g_pDisplay->GetFramePixels();
-	if (pixels) {
+	if (pixels && ATMacLeakDebugShouldUpload(g_macLeakNewFrame)) {
 		int pw = g_pDisplay->GetFramePixelWidth();
 		int ph = g_pDisplay->GetFramePixelHeight();
 		int pp = g_pDisplay->GetFramePixelPitch();
 		g_pBackend->UploadFrame(pixels, pw, ph, pp);
+		ATMacLeakDebugOnUpload((size_t)pp * ph);
 	}
+	g_macLeakNewFrame = false;
 
 	// Update filter mode on texture if setting changed.
 	ATDisplayFilterMode curFilter = ATUIGetDisplayFilterMode();
@@ -1434,7 +1441,9 @@ static void RenderAndPresent() {
 	// Draw ImGui UI on top
 	ATUIRenderFrame(g_sim, *g_pDisplay, g_pBackend, g_uiState);
 
-	g_pBackend->Present();
+	if (ATMacLeakDebugShouldPresent())
+		g_pBackend->Present();
+	ATMacLeakDebugTick();
 }
 
 #ifdef ALTIRRA_BRIDGE_ENABLED
@@ -1856,6 +1865,7 @@ int main(int argc, char *argv[]) {
 		SDL_SetRenderVSync(g_pRenderer, 0);
 		g_pBackend = new DisplayBackendSDLRenderer(g_pWindow, g_pRenderer);
 	}
+	ATMacLeakDebugInit(g_pWindow, useGL ? "OpenGL" : "SDL_Renderer");
 
 	// Load UI mode preference before ImGui init so ATUIApplyModeStyle()
 	// inside ATUIInit() sees the correct mode.
@@ -3146,7 +3156,11 @@ int main(int argc, char *argv[]) {
 				break;
 		}
 
+		g_macLeakNewFrame = g_pDisplay->IsFramePending();
 		g_pDisplay->PrepareFrame();
+		if (g_macLeakNewFrame)
+			ATMacLeakDebugOnEmulatedFrame();
+		ATMacLeakDebugSetPaused(result == ATSimulator::kAdvanceResult_Stopped);
 
 #ifdef ALTIRRA_NETPLAY_ENABLED
 		// CRITICAL for lockstep determinism: advance the lockstep

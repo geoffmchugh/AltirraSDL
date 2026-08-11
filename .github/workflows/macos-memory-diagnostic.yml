@@ -22,9 +22,14 @@ on:
         required: true
         default: true
         type: boolean
+      publish_release:
+        description: Replace the asset on memory-diagnostic-bad4452f
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   diagnose:
@@ -50,7 +55,8 @@ jobs:
           cmake --preset macos-debug \
             -DALTIRRA_FETCH_SDL3=ON \
             -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF \
-            -DALTIRRA_FETCH_FFMPEG=OFF
+            -DALTIRRA_FETCH_FFMPEG=OFF \
+            -DALTIRRA_MAC_OS_LEAK_DEBUG=ON
 
       - name: Build AltirraSDL
         run: |
@@ -200,9 +206,35 @@ jobs:
         run: |
           APP_PATH="build/macos-debug/src/AltirraSDL/AltirraSDL.app"
           if [ -d "$APP_PATH" ]; then
-            ditto -c -k --keepParent "$APP_PATH" \
+            PACKAGE_DIR="$RUNNER_TEMP/AltirraSDL-macos-memory-diagnostic"
+            mkdir -p "$PACKAGE_DIR"
+            ditto "$APP_PATH" "$PACKAGE_DIR/AltirraSDL.app"
+            cp run-macos-memory-diagnostic.sh MAC_OS_LEAK_DEBUG.md "$PACKAGE_DIR/"
+            chmod +x "$PACKAGE_DIR/run-macos-memory-diagnostic.sh"
+            ditto -c -k --keepParent "$PACKAGE_DIR" \
               "$RUNNER_TEMP/AltirraSDL-macos-memory-diagnostic.zip"
           fi
+
+      - name: Replace diagnostic prerelease asset
+        if: ${{ inputs.publish_release && success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload memory-diagnostic-bad4452f \
+            "$RUNNER_TEMP/AltirraSDL-macos-memory-diagnostic.zip" \
+            --clobber
+          gh release edit memory-diagnostic-bad4452f \
+            --prerelease \
+            --notes "$(cat <<EOF
+          Diagnostic-only Apple Silicon build for the macOS memory-growth investigation.
+
+          Instrumented source commit: $GITHUB_SHA
+
+          The ZIP contains AltirraSDL.app, a Terminal launcher, and MAC_OS_LEAK_DEBUG.md. Run the baseline mode first; it prints a MACLEAK memory/frame report every ten seconds and saves the output to a log file. Controlled new-frames-only, no-upload, and no-present modes are also included for follow-up tests.
+
+          This build excludes FFmpeg recording and librashader. It is not a normal release.
+          EOF
+          )"
 
       - name: Upload diagnostic reports
         if: always()

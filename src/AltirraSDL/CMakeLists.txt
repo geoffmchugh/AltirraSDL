@@ -37,6 +37,7 @@ endif()
 target_sources(AltirraSDL PRIVATE
     # --- app/ : process lifecycle, main loop, CLI, crash ---
     source/app/main_sdl3.cpp
+    source/app/macos_leak_debug.cpp
     source/app/main_pacer.cpp
     source/app/main_window.cpp
     source/app/window_caption_sdl3.cpp
@@ -349,6 +350,17 @@ endif()
 #   cmake -DALTIRRA_CPU_TESTS=ON ...
 # ---------------------------------------------------------------------------
 option(ALTIRRA_CPU_TESTS "Build the 65C816 --cpu-test conformance harness" OFF)
+
+# Diagnostic-only macOS memory instrumentation. This is deliberately OFF for
+# every normal build. See MAC_OS_LEAK_DEBUG.md for its isolated CI/release path.
+option(ALTIRRA_MAC_OS_LEAK_DEBUG
+    "Enable temporary macOS memory leak instrumentation" OFF)
+if(ALTIRRA_MAC_OS_LEAK_DEBUG)
+    if(NOT APPLE)
+        message(FATAL_ERROR "ALTIRRA_MAC_OS_LEAK_DEBUG is macOS-only")
+    endif()
+    target_compile_definitions(AltirraSDL PRIVATE ALTIRRA_MAC_OS_LEAK_DEBUG=1)
+endif()
 if(ALTIRRA_CPU_TESTS)
     target_sources(AltirraSDL PRIVATE
         source/app/cputest_runner.cpp
