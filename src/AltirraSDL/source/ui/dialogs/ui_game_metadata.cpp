@@ -286,6 +286,11 @@ VDStringA FormatBytes(uint64_t bytes) {
 void ATUIMetadataStartAccountTest() {
 	if (g_testState.load() == (int)ATMetadataTestState::Running)
 		return;
+	if (!ATMetadataNetworkAllowed(ATMetadataGetSettings())) {
+		SetTestMessage(VDStringA("Online metadata is disabled."));
+		g_testState.store((int)ATMetadataTestState::Failure);
+		return;
+	}
 
 	if (g_testThread.joinable())
 		g_testThread.join();
@@ -355,7 +360,25 @@ void ATUIMetadataShutdownAccountTest() {
 // Shared actions
 // ---------------------------------------------------------------------------
 
+void ATUIMetadataSetAccessMode(ATMetadataAccessMode mode) {
+	ATMetadataSettings& s = ATMetadataGetSettings();
+	s.mAccessMode = mode;
+	s.mbAutoFetchNewGames = mode == ATMetadataAccessMode::Automatic;
+	s.mbConsentRecorded = true;
+
+	if (mode == ATMetadataAccessMode::Disabled) {
+		ATMetadataGetScraper().Cancel();
+		g_testCancel.store(true);
+	}
+
+	ATMetadataSaveSettings();
+}
+
 bool ATUIMetadataIsUsable(VDStringA& outWhyNot) {
+	if (!ATMetadataNetworkAllowed(ATMetadataGetSettings())) {
+		outWhyNot = "Online metadata is disabled. Enable it in Metadata settings.";
+		return false;
+	}
 	if (!ATHttp::Available()) {
 		outWhyNot = ATScreenScraperOutcomeText(
 			ATScreenScraperOutcome::Unavailable);
@@ -381,6 +404,9 @@ bool ATUIMetadataCanDownloadNow(VDStringA& outWhyNot) {
 }
 
 void ATUIMetadataStartDownload(ATGameLibrary& lib, bool onlyMissing) {
+	VDStringA whyNot;
+	if (!ATUIMetadataCanDownloadNow(whyNot))
+		return;
 	ATMetadataScraper& scraper = ATMetadataGetScraper();
 	scraper.ClearBanner();
 	// Drop the previous run's verdict the instant a new one starts, so a
@@ -391,6 +417,9 @@ void ATUIMetadataStartDownload(ATGameLibrary& lib, bool onlyMissing) {
 
 void ATUIMetadataStartDownloadForEntry(ATGameLibrary& lib, int entryIndex) {
 	if (entryIndex < 0 || (size_t)entryIndex >= lib.GetEntries().size())
+		return;
+	VDStringA whyNot;
+	if (!ATUIMetadataCanDownloadNow(whyNot))
 		return;
 	ATMetadataScraper& scraper = ATMetadataGetScraper();
 	scraper.ClearBanner();
@@ -558,7 +587,9 @@ void ATUIMetadataPumpAutoFetch(ATGameLibrary& lib) {
 
 	if (fresh.empty())
 		return;
-	if (!ATMetadataGetSettings().mbAutoFetchNewGames)
+	const ATMetadataSettings& settings = ATMetadataGetSettings();
+	if (!settings.mbConsentRecorded
+		|| settings.mAccessMode != ATMetadataAccessMode::Automatic)
 		return;
 
 	VDStringA whyNot;
@@ -1453,12 +1484,18 @@ void ATUIRenderMetadataTab(ATGameLibrary& lib) {
 
 	if (ImGui::Checkbox("Also try the Atari 5200 database when a cartridge "
 		"isn't found", &s.mbTry5200Fallback)) dirty = true;
-	if (ImGui::Checkbox("Fetch metadata for newly added games automatically",
-		&s.mbAutoFetchNewGames)) dirty = true;
+	int accessMode = (int)s.mAccessMode;
+	static const char *const accessModes[] = {
+		"Disabled", "On demand", "Automatic"
+	};
+	if (ImGui::Combo("Online metadata", &accessMode, accessModes, 3)) {
+		ATUIMetadataSetAccessMode((ATMetadataAccessMode)accessMode);
+	}
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip(
-			"When games appear in the library, look them up without\n"
-			"being asked.\n\n"
+			"Disabled never contacts ScreenScraper. On demand only\n"
+			"connects after a Get Metadata action. Automatic also\n"
+			"looks up newly added games.\n\n"
 			"Applies to up to %d new games at a time. A larger import is\n"
 			"left for you to start yourself, so a first scan of a big\n"
 			"collection never spends the shared allowance unasked.",

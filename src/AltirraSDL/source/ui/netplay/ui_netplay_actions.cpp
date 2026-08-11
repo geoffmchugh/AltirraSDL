@@ -157,6 +157,11 @@ ATNetplay::LobbyEndpoint EndpointFromUrl(const std::string& urlIn) {
 // first lobby for its single-shot GET /v1/session/<id> fetch.
 std::vector<EnabledHttpLobby> AllEnabledHttpLobbies() {
 	std::vector<EnabledHttpLobby> out;
+	// Keep configuration loading behind the same explicit-use gate as
+	// network requests. This also prevents shutdown of an untouched process
+	// from creating lobby.ini merely while looking for registrations to
+	// delete.
+	if (!IsLobbyAccessActivated()) return out;
 	for (const auto& e : GetConfiguredLobbies()) {
 		if (!e.enabled) continue;
 		if (e.kind != ATNetplay::LobbyKind::Http) continue;
@@ -937,6 +942,7 @@ void EnableHostedGame(const std::string& gameId) {
 	HostedGame* o = FindHostedGame(gameId);
 	if (!o) return;
 	if (o->enabled) return;   // already enabled; nothing to do
+	ActivateLobbyAccess();
 
 	// Enforce the parallel-enabled cap (matches the server-side
 	// kMaxHostedGamesPerHost gate).  Counting peers explicitly here —
@@ -985,6 +991,11 @@ void RemoveHostedGame(const std::string& gameId) {
 
 void ReconcileHostedGames(uint64_t nowMs) {
 	State& st = GetState();
+	// This driver can open coordinators, perform NAT discovery, and post
+	// lobby requests. It must remain completely dormant until an explicit
+	// Online Play action activates network access for this process.
+	if (!IsLobbyAccessActivated())
+		return;
 
 	// 1. Compute UserActivity from coordinator phases.
 	UserActivity prev = st.activity;
@@ -1530,6 +1541,9 @@ void ActivityTrack_OnLocalPlayStop() {
 // -------------------------------------------------------------------
 
 void StartHostingAction() {
+	// This function is also called by WASM/CLI deep links that may not have
+	// navigated through an in-emulator Netplay screen first.
+	ActivateLobbyAccess();
 	State& st = GetState();
 	if (st.session.pendingCartName.empty()) {
 		st.session.lastError =
@@ -2180,6 +2194,9 @@ bool OnBrokerLobbyResult(LobbyResult& r) {
 }
 
 void StartJoiningAction() {
+	// Treat all callers, including direct-link and broker paths, as an
+	// explicit Join action before any transport can be opened.
+	ActivateLobbyAccess();
 	State& st = GetState();
 	if (ATNetplayGlue::IsActive()) {
 #if defined(__EMSCRIPTEN__)

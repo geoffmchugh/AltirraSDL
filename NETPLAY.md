@@ -109,7 +109,7 @@ for the next attempt.
 
 ## Pointing at a different lobby
 
-On first launch AltirraSDL writes
+The first time Online Play is opened, AltirraSDL writes
 `~/.config/altirra/lobby.ini` with the built-in defaults:
 
 ```ini
@@ -123,19 +123,14 @@ url     = http://lobby.atari.org.pl:8080
 region  = global
 enabled = true
 
-; Backup lobby — same server, alternate DNS via DuckDNS.  Active by
-; default so federation auto-falls-back: if one DNS path is
-; unreachable (or its TLS cert is pending) the other still answers.
-; While both names resolve to our server, a hosted game registers on
-; each separately and Browse shows it twice (different sessionIds,
-; same backend) — cosmetic and joiners can use either copy.  Flip
-; this to `enabled = false` if you prefer single-listing hosting
-; once both DNS names are stable.
+; Backup lobby — same server, alternate DNS via DuckDNS. Disabled by
+; default because enabled entries are federated, not ordered failovers;
+; enabling both aliases duplicates traffic to the same service.
 [backup]
 name    = Altirra Lobby (DuckDNS backup)
 url     = http://altirra-lobby.duckdns.org:8080
 region  = global
-enabled = true
+enabled = false
 
 [lan]
 name      = LAN

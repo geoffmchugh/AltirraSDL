@@ -25,6 +25,8 @@
 #include "ui_frame_capture.h"
 #include "ui_mode.h"
 #include "ui/mobile/ui_mobile.h"
+#include "ui/tools/setup_wizard_shared.h"
+#include "media/metadata_settings.h"
 #include "simulator.h"
 #include "gtia.h"
 #include "oshelper.h"
@@ -32,6 +34,9 @@
 #include "inputdefs.h"
 #include "ui/debugger/ui_debugger.h"
 #include "netplay/netplay_input.h"
+#ifdef ALTIRRA_NETPLAY_ENABLED
+#include "ui/netplay/ui_netplay_state.h"
+#endif
 #include "logging.h"
 
 bool g_testModeEnabled = false;
@@ -415,6 +420,33 @@ static std::string BuildStateJson(ATSimulator &sim, ATUIState &state) {
 	json += ",\"hardwareMode\":";
 	json += std::to_string((int)hwMode);
 
+	json += "}";
+
+	json += ",\"setupWizard\":{";
+	json += "\"page\":";
+	json += std::to_string(g_setupWiz.page);
+	json += ",\"metadataConsentRecorded\":";
+	json += ATMetadataGetSettings().mbConsentRecorded ? "true" : "false";
+	json += "}";
+
+	// Display state used by live-preview tests. The render loop consumes
+	// screenEffectsMode every frame, so a change observed here is the same
+	// change used for the next presented frame.
+	json += ",\"display\":{";
+	json += "\"screenEffectsMode\":";
+	json += std::to_string((int)state.screenEffectsMode);
+	json += "}";
+
+	// Outbound-service gates. These are deliberately observable in test
+	// mode so startup regressions can be caught without relying on timing
+	// or an external packet sniffer.
+	json += ",\"network\":{";
+#ifdef ALTIRRA_NETPLAY_ENABLED
+	json += "\"lobbyAccessActivated\":";
+	json += ATNetplayUI::IsLobbyAccessActivated() ? "true" : "false";
+#else
+	json += "\"lobbyAccessActivated\":false";
+#endif
 	json += "}";
 
 	// Visible windows

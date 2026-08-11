@@ -182,6 +182,17 @@ void RenderSettingsPage_Metadata(ATMobileUIState &mobileState) {
 
 	const float rowH = dp(ATTouch::kButtonHeightNormal);
 
+	ATTouchSection("Online access");
+	bool onlineEnabled =
+		s.mAccessMode != ATMetadataAccessMode::Disabled;
+	if (ATTouchToggle("Enable ScreenScraper metadata", &onlineEnabled)) {
+		ATUIMetadataSetAccessMode(onlineEnabled
+			? ATMetadataAccessMode::OnDemand
+			: ATMetadataAccessMode::Disabled);
+	}
+	ATTouchMutedText("On demand connects only after you choose a Get or "
+		"Download Metadata action.");
+
 	// --- Availability -------------------------------------------------
 	VDStringA whyNot;
 	const bool usable = ATUIMetadataIsUsable(whyNot);
@@ -383,10 +394,11 @@ void RenderSettingsPage_Metadata(ATMobileUIState &mobileState) {
 		s.mbTry5200Fallback = v;
 		dirty = true;
 	}
-	v = s.mbAutoFetchNewGames;
+	v = s.mAccessMode == ATMetadataAccessMode::Automatic;
 	if (ATTouchToggle("Fetch for new games automatically", &v)) {
-		s.mbAutoFetchNewGames = v;
-		dirty = true;
+		ATUIMetadataSetAccessMode(v
+			? ATMetadataAccessMode::Automatic
+			: ATMetadataAccessMode::OnDemand);
 	}
 	{
 		char hint[192];

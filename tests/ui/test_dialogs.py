@@ -230,6 +230,61 @@ class TestSetupWizard:
         has_nav = ("Next >" in labels or "Finish" in labels or "Close" in labels)
         assert has_nav, f"No navigation buttons found. Labels: {labels[:20]}"
 
+    def test_metadata_choice_preselects_on_demand_and_confirms_on_next(
+            self, emu: AltirraTestHarness, tmp_path, monkeypatch):
+        """On demand is recommended, but only Next records the choice."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        with AltirraTestHarness(
+                executable=emu.executable,
+                extra_args=["--ui-mode", "desktop"]) as fresh:
+            fresh.open_dialog("SetupWizard")
+            fresh.wait_frames(5)
+            for expected_page in (1, 3):
+                fresh.click(self.WIN, "Next >")
+                fresh.wait_frames(5)
+                state = fresh.query_state()["state"]
+                assert state["setupWizard"]["page"] == expected_page
+
+            assert state["setupWizard"]["metadataConsentRecorded"] is False
+            next_item = fresh.find_item(self.WIN, "Next >")
+            assert next_item is not None and next_item["disabled"] is False
+
+            labels = fresh.get_item_labels(self.WIN)
+            assert "Download on demand (recommended)" in labels, labels
+            fresh.click(self.WIN, "Next >")
+            fresh.wait_frames(5)
+            state = fresh.query_state()["state"]
+            assert state["setupWizard"]["metadataConsentRecorded"] is True
+            assert state["setupWizard"]["page"] == 2
+
+    def test_basic_shader_selection_is_live(self, emu: AltirraTestHarness,
+                                            tmp_path, monkeypatch):
+        """The wizard drives the per-frame display mode immediately."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        with AltirraTestHarness(
+                executable=emu.executable,
+                extra_args=["--ui-mode", "desktop"]) as fresh:
+            fresh.open_dialog("SetupWizard")
+            fresh.wait_frames(5)
+
+            # Welcome -> Interface -> Metadata -> Library -> Appearance ->
+            # Screen Effects.
+            for expected_page in (1, 3, 2, 5, 6):
+                fresh.click(self.WIN, "Next >")
+                fresh.wait_frames(5)
+                state = fresh.query_state()["state"]
+                assert state["setupWizard"]["page"] == expected_page
+
+            fresh.click(self.WIN, "None")
+            fresh.wait_frames(5)
+            state = fresh.query_state()["state"]
+            assert state["display"]["screenEffectsMode"] == 0
+
+            fresh.click(self.WIN, "Basic Shaders")
+            fresh.wait_frames(5)
+            state = fresh.query_state()["state"]
+            assert state["display"]["screenEffectsMode"] == 1
+
 
 # ── Disk Explorer ───────────────────────────────────────────────────────
 

@@ -18,6 +18,7 @@
 #include <stdafx.h>
 
 #include "ui_netplay_lobby_worker.h"
+#include "ui_netplay_state.h"
 
 #include "netplay/nat_discovery.h"
 #include "netplay/port_mapping.h"
@@ -70,6 +71,7 @@ void LobbyWorker::Stop() {
 }
 
 bool LobbyWorker::Post(LobbyRequest req, const std::string& source) {
+	if (!IsLobbyAccessActivated()) return false;
 	if (!mRunning.load()) return false;
 	{
 		std::lock_guard<std::mutex> lk(mMu);
@@ -871,6 +873,7 @@ void OnError(emscripten_fetch_t* f) {
 }  // namespace
 
 bool LobbyWorker::Post(LobbyRequest req, const std::string& source) {
+	if (!IsLobbyAccessActivated()) return false;
 	if (!mRunning.load()) return false;
 
 	auto* ctx       = new FetchCtx();

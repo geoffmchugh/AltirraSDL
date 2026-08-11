@@ -973,6 +973,10 @@ ATScreenScraperOutcome ATScreenScraperFetch(
 	out = ATScreenScraperResult();
 	outError.clear();
 
+	if (!ATMetadataNetworkAllowed(settings)) {
+		outError = "Online metadata is disabled.";
+		return ATScreenScraperOutcome::Unavailable;
+	}
 	if (!ATHttp::Available())
 		return ATScreenScraperOutcome::Unavailable;
 
@@ -1063,6 +1067,10 @@ bool ATScreenScraperFetchAccount(
 {
 	out = ATScreenScraperAccount();
 
+	if (!ATMetadataNetworkAllowed(settings)) {
+		out.mError = "Online metadata is disabled.";
+		return false;
+	}
 	if (!ATHttp::Available()) {
 		out.mError = ATScreenScraperOutcomeText(
 			ATScreenScraperOutcome::Unavailable);

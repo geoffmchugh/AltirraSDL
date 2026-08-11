@@ -215,6 +215,10 @@ bool ATMetadataScraper::Start(ATGameLibrary& lib,
 		mController.join();
 	mWorkers.clear();
 
+	if (!ATMetadataNetworkAllowed(ATMetadataGetSettings())) {
+		SetBanner("Online metadata is disabled. Enable it in Metadata settings.");
+		return false;
+	}
 	if (!ATHttp::Available()) {
 		SetBanner(ATScreenScraperOutcomeText(
 			ATScreenScraperOutcome::Unavailable));

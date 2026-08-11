@@ -170,6 +170,14 @@ void ATMetadataLoadSettings() {
 	VDRegistryAppKey key(kMetadataKey, false);
 
 	ATMetadataSettings s;
+	const int consentVersion = key.getInt("ConsentVersion", 0);
+	int accessMode = key.getInt("AccessMode",
+		(int)ATMetadataAccessMode::OnDemand);
+	if (accessMode < (int)ATMetadataAccessMode::Disabled
+		|| accessMode > (int)ATMetadataAccessMode::Automatic)
+		accessMode = (int)ATMetadataAccessMode::OnDemand;
+	s.mAccessMode = (ATMetadataAccessMode)accessMode;
+	s.mbConsentRecorded = consentVersion >= 1;
 
 	s.mbUseUserAccount = key.getBool("UseUserAccount", s.mbUseUserAccount);
 	s.mUserName = ReadString(key, "UserName", "");
@@ -191,8 +199,11 @@ void ATMetadataLoadSettings() {
 	// to look at"; reusing it would silently reinterpret a stale answer,
 	// and would also deny existing installs the new Screenshot default.
 	s.mbFuzzyNameMatch = key.getBool("FuzzyNameMatch", s.mbFuzzyNameMatch);
-	s.mbAutoFetchNewGames =
-		key.getBool("AutoFetchNewGames", s.mbAutoFetchNewGames);
+	// AutoFetchNewGames used to default true without an explicit consent
+	// step. Do not reinterpret that legacy value as consent on upgrade.
+	// Once ConsentVersion is present, AccessMode is authoritative.
+	s.mbAutoFetchNewGames = s.mbConsentRecorded
+		&& s.mAccessMode == ATMetadataAccessMode::Automatic;
 	s.mArtSlot = key.getInt("ArtSlot", s.mArtSlot);
 	if (s.mArtSlot < 0 || s.mArtSlot >= kATMetadataArtSlotCount)
 		s.mArtSlot = 2;
@@ -213,6 +224,8 @@ void ATMetadataLoadSettings() {
 void ATMetadataSaveSettings() {
 	VDRegistryAppKey key(kMetadataKey, true);
 	const ATMetadataSettings& s = g_settings;
+	key.setInt("ConsentVersion", s.mbConsentRecorded ? 1 : 0);
+	key.setInt("AccessMode", (int)s.mAccessMode);
 
 	key.setBool("UseUserAccount", s.mbUseUserAccount);
 	key.setString("UserName", s.mUserName.c_str());
@@ -229,7 +242,9 @@ void ATMetadataSaveSettings() {
 	key.setBool("DownloadLogo", s.mbDownloadLogo);
 
 	key.setBool("FuzzyNameMatch", s.mbFuzzyNameMatch);
-	key.setBool("AutoFetchNewGames", s.mbAutoFetchNewGames);
+	key.setBool("AutoFetchNewGames",
+		s.mbConsentRecorded
+			&& s.mAccessMode == ATMetadataAccessMode::Automatic);
 	key.setInt("ArtSlot", s.mArtSlot);
 
 	key.setString("Region", s.mRegion.c_str());

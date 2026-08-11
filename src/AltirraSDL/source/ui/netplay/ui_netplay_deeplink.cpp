@@ -189,6 +189,10 @@ void EnsureOnScreen(Screen target) {
 
 void SetPendingDeepLinkSessionId(const std::string& sessionId) {
 	if (sessionId.empty()) return;
+
+	// A session URL is explicit user intent even before an in-emulator
+	// Online Play screen is rendered.
+	ActivateLobbyAccess();
 	{
 		std::lock_guard<std::mutex> lk(g_deepLinkMu);
 		g_pendingSessionId = sessionId;
@@ -632,6 +636,9 @@ void InitAutoHostBaseline() {
 
 void RequestAutoHost(const std::string& title,
                      const std::string& primaryPath) {
+	// Play Together / --host-session is an explicit Netplay action even
+	// when broker mode suppresses all in-emulator Netplay screens.
+	ActivateLobbyAccess();
 	{
 		std::lock_guard<std::mutex> lk(g_autoHostMu);
 		g_pendingHostTitle = title;

@@ -1,0 +1,15 @@
+{
+  "_comment": "Official lobby deployment profile. Lobby capability is enabled, but lobby API access still requires an explicit Online Play, broker, join, or host action.",
+  "deploymentMode": "lobby",
+  "lobbyHost": "lobby.atari.org.pl",
+  "lobbyUrl": "/AltirraSDL/",
+  "lobbyLabel": "⬅ Lobby",
+  "enableLobbyBroker": true,
+  "gamePacks": [
+    {
+      "name": "Curated Atari 8-bit Library",
+      "url": "/AltirraSDL/library/curated_pack.zip",
+      "description": "~196 classic + modern titles with screenshots (~9 MB)"
+    }
+  ]
+}

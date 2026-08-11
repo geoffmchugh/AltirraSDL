@@ -1095,19 +1095,29 @@ elseif(ALTIRRA_WASM)
     endif()
 
     # Optional config.json sibling to AltirraSDL.html — operators
-    # override per-host firmware mirror + game packs by editing this
-    # at deploy time.  The default points at the lobby's curated pack
-    # so the first-run wizard offers the Curated Library install
-    # immediately.  Kept as a plain copy (no @VAR@ substitutions) so
-    # an operator can hand-edit the deployed file without rebuilding.
-    set(ALTIRRA_WASM_CONFIG_TEMPLATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wasm_config.json")
+    # override per-host firmware mirror, lobby integration, and game
+    # packs. The default is a network-idle standalone profile; the
+    # official lobby deployment selects wasm_config_lobby.json. Kept as
+    # a plain copy so operators can replace it without recompiling.
+    set(ALTIRRA_WASM_HOST_CONFIG "" CACHE FILEPATH
+        "Host config.json for the WASM deployment")
+    if(ALTIRRA_WASM_HOST_CONFIG)
+        get_filename_component(ALTIRRA_WASM_CONFIG_TEMPLATE
+            "${ALTIRRA_WASM_HOST_CONFIG}" ABSOLUTE
+            BASE_DIR "${CMAKE_SOURCE_DIR}")
+        if(NOT EXISTS "${ALTIRRA_WASM_CONFIG_TEMPLATE}")
+            message(FATAL_ERROR
+                "ALTIRRA_WASM_HOST_CONFIG does not exist: "
+                "${ALTIRRA_WASM_CONFIG_TEMPLATE}")
+        endif()
+    else()
+        set(ALTIRRA_WASM_CONFIG_TEMPLATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wasm_config.json")
+    endif()
     set(ALTIRRA_WASM_CONFIG_OUTPUT
         "${CMAKE_CURRENT_BINARY_DIR}/config.json")
-    if(EXISTS "${ALTIRRA_WASM_CONFIG_TEMPLATE}")
-        configure_file("${ALTIRRA_WASM_CONFIG_TEMPLATE}"
-            "${ALTIRRA_WASM_CONFIG_OUTPUT}" COPYONLY)
-    endif()
+    configure_file("${ALTIRRA_WASM_CONFIG_TEMPLATE}"
+        "${ALTIRRA_WASM_CONFIG_OUTPUT}" COPYONLY)
 
     # wasm_lib_deeplink.js — extracted from index.html.in so the host
     # page stays under ~6,200 lines.  Loaded synchronously by index.html

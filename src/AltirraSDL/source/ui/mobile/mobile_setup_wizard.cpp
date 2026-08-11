@@ -40,7 +40,9 @@
 
 #include "mobile_internal.h"
 #include "../tools/setup_wizard_shared.h"
+#include "../dialogs/ui_game_metadata.h"
 #include "../gamelibrary/game_library.h"
+#include "media/metadata_settings.h"
 #include "altirra_icons.h"
 
 extern ATSimulator g_sim;
@@ -57,7 +59,8 @@ extern void ATRegistryFlushToDisk();
 static const char *WizStepLabel(int page) {
 	if (page == 0)                  return "Welcome";
 	if (page == 1)                  return "Interface mode";
-	if (page >= 2 && page <= 4)     return "Game Library";
+	if (page == 3)                  return "Online metadata";
+	if (page == 2)                  return "Game Library";
 	if (page == 5)                  return "Appearance";
 	if (page == 6)                  return "Screen Effects";
 	if (page >= 10 && page <= 19)   return "Firmware";
@@ -254,6 +257,47 @@ static void WizMobile_GameLibrary(SDL_Window *window) {
 		g_mobileState.currentScreen = ATMobileUIScreen::FileBrowser;
 	}
 #endif
+}
+
+static void WizMobile_OnlineMetadata() {
+	ATMetadataSettings& m = ATMetadataGetSettings();
+	ImGui::TextWrapped(
+		"Choose when AltirraSDL may contact ScreenScraper.fr. It receives "
+		"game identification (filename, size and CRC) and your public IP; "
+		"game files are never uploaded.");
+	ImGui::Dummy(ImVec2(0, dp(8.0f)));
+
+	// On Demand is the recommended preselection. Rendering the page does
+	// not record consent; pressing Next confirms it through the shared
+	// Wiz_ConfirmMetadataChoice() helper.
+	int mode = m.mbConsentRecorded
+		? (int)m.mAccessMode
+		: (int)ATMetadataAccessMode::OnDemand;
+	bool choiceMade = false;
+	if (WizChoiceTile("Download on demand (recommended)",
+		"Only after you choose Get Metadata",
+		mode == (int)ATMetadataAccessMode::OnDemand)) {
+		mode = (int)ATMetadataAccessMode::OnDemand;
+		choiceMade = true;
+	}
+	if (WizChoiceTile("Automatic",
+		"Look up newly added games automatically",
+		mode == (int)ATMetadataAccessMode::Automatic)) {
+		mode = (int)ATMetadataAccessMode::Automatic;
+		choiceMade = true;
+	}
+	if (WizChoiceTile("Disabled", "Never contact ScreenScraper",
+		mode == (int)ATMetadataAccessMode::Disabled)) {
+		mode = (int)ATMetadataAccessMode::Disabled;
+		choiceMade = true;
+	}
+
+	if (choiceMade) {
+		ATUIMetadataSetAccessMode((ATMetadataAccessMode)mode);
+	}
+	if (!m.mbConsentRecorded)
+		ATTouchMutedText(
+			"Download on demand is selected. Choose Next to confirm.");
 }
 
 static void WizMobile_Appearance() {
@@ -774,6 +818,7 @@ void RenderMobileSetupWizard(ATSimulator &sim, ATUIState &uiState,
 	switch (g_setupWiz.page) {
 		case 0:  WizMobile_Welcome();          break;
 		case 1:  WizMobile_InterfaceMode(window); break;
+		case 3:  WizMobile_OnlineMetadata();     break;
 		case 2:  WizMobile_GameLibrary(window); break;
 		case 5:  WizMobile_Appearance();        break;
 		// Page 6 is desktop-only (skipped by Wiz_GetNextPage in Gaming);
@@ -826,6 +871,8 @@ void RenderMobileSetupWizard(ATSimulator &sim, ATUIState &uiState,
 		if (ATTouchButton("Next", ImVec2(btnW, btnH),
 			ATTouchButtonStyle::Accent, ICON_MD_ARROW_FORWARD))
 		{
+			if (g_setupWiz.page == 3)
+				Wiz_ConfirmMetadataChoice();
 			g_setupWiz.wentPastFirst = true;
 			g_setupWiz.page = next;
 		}

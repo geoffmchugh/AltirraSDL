@@ -16,7 +16,16 @@
 
 #include <vd2/system/VDString.h>
 
+enum class ATMetadataAccessMode : int {
+	Disabled = 0,
+	OnDemand = 1,
+	Automatic = 2,
+};
+
 struct ATMetadataSettings {
+	// Network consent. OnDemand is the privacy-preserving default: explicit
+	// Get Metadata actions work, but library scans never contact a provider.
+	ATMetadataAccessMode mAccessMode = ATMetadataAccessMode::OnDemand;
 	// --- Account -----------------------------------------------------
 	// When false the request is anonymous: quota is charged to the
 	// application's developer credential and shared with every other
@@ -66,19 +75,19 @@ struct ATMetadataSettings {
 	// a setting rather than unconditional.
 	bool mbFuzzyNameMatch    = true;
 
-	// Fetch metadata for games as they appear in the library, without
-	// being asked.  On by default: a handful of new files is the common
-	// case, and having their covers just be there is the whole point of
-	// the feature.
+	// Legacy mirror of mAccessMode == Automatic. Automatic access is
+	// opt-in; the default OnDemand mode never starts network work merely
+	// because games appeared in the library.
 	//
 	// Deliberately bounded rather than unconditional — see
 	// kATMetadataAutoFetchMax.  A first import of several thousand
 	// unmatched files is a decision the user should make, not something
 	// that happens to them while they are looking at the grid.
-	bool mbAutoFetchNewGames = true;
+	bool mbAutoFetchNewGames = false;
 
 	// --- One-shot UI state -------------------------------------------
 	bool mbFirstRunNudgeShown = false;
+	bool mbConsentRecorded = false;
 };
 
 // Region / language / art-slot tables, shared by both frontends so the
@@ -107,6 +116,12 @@ int ATMetadataFindLanguageIndex(const char *code);
 enum : int { kATMetadataAutoFetchMax = 25 };
 
 ATMetadataSettings& ATMetadataGetSettings();
+
+// Single policy check used by every ScreenScraper network boundary.
+// OnDemand and Automatic permit requests; Disabled forbids them.
+inline bool ATMetadataNetworkAllowed(const ATMetadataSettings& settings) {
+	return settings.mAccessMode != ATMetadataAccessMode::Disabled;
+}
 
 void ATMetadataLoadSettings();
 

@@ -52,6 +52,8 @@
 #include "ui_mobile.h"
 #include "mobile_internal.h"
 #include "../gamelibrary/game_library.h"
+#include "../dialogs/ui_game_metadata.h"
+#include "media/metadata_settings.h"
 #include "inputmanager.h"
 #include "inputmap.h"
 #include "adaptive_input.h"
@@ -577,6 +579,14 @@ void Wiz_RenderConfigurationSummary(ATSimulator &sim) {
 		else                     snprintf(libBuf, sizeof(libBuf), "%zu folders", sources.size());
 		Wiz_DrawSummaryRow("Game Library", libBuf);
 	}
+	{
+		const auto mode = ATMetadataGetSettings().mAccessMode;
+		const char *label = mode == ATMetadataAccessMode::Disabled
+			? "Disabled"
+			: mode == ATMetadataAccessMode::Automatic
+				? "Automatic" : "On demand";
+		Wiz_DrawSummaryRow("Online metadata", label);
+	}
 
 	// Joystick port-1 mapping
 	if (ATInputManager *im = sim.GetInputManager()) {
@@ -725,7 +735,8 @@ int Wiz_GetPrevPage(int page) {
 	switch (page) {
 		case 0:  return -1;
 		case 1:  return 0;
-		case 2:  return 1;
+		case 3:  return 1;
+		case 2:  return 3;
 		case 5:  return 2;
 		case 6:  return 5;
 		// Gaming Mode merges Screen Effects (page 6) into the Appearance
@@ -751,7 +762,8 @@ int Wiz_GetPrevPage(int page) {
 int Wiz_GetNextPage(int page) {
 	switch (page) {
 		case 0:  return 1;
-		case 1:  return 2;
+		case 1:  return 3;
+		case 3:  return 2;
 		case 2:  return 5;
 		// Gaming Mode skips page 6 (Screen Effects) — the perf preset
 		// in the merged Appearance page covers it.  Backends without
@@ -769,6 +781,14 @@ int Wiz_GetNextPage(int page) {
 		case 35: return g_sim.GetHardwareMode() == kATHardwareMode_5200 ? 41 : 40;
 		default: return -1;
 	}
+}
+
+void Wiz_ConfirmMetadataChoice() {
+	ATMetadataSettings& m = ATMetadataGetSettings();
+	if (m.mbConsentRecorded)
+		return;
+
+	ATUIMetadataSetAccessMode(ATMetadataAccessMode::OnDemand);
 }
 
 void Wiz_PumpAsync() {
@@ -1063,7 +1083,8 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 		static const struct { int pageMin; int pageMax; const char *label; bool desktopOnly; } kSteps[] = {
 			{ 0, 0, "Welcome", false },
 			{ 1, 1, "Interface mode", false },
-			{ 2, 4, "Game Library", false },
+			{ 3, 3, "Online metadata", false },
+			{ 2, 2, "Game Library", false },
 			{ 5, 5, "Appearance", false },
 			{ 6, 6, "Screen Effects", true },
 			{ 10, 19, "Setup firmware", false },
@@ -1142,6 +1163,62 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 				"You can switch between modes at any time from the View menu (Desktop) "
 				"or the hamburger menu (Gaming)."
 			);
+			break;
+		}
+
+		case 3: { // Online metadata consent — before adding library folders
+			ATMetadataSettings& m = ATMetadataGetSettings();
+			ImGui::TextWrapped(
+				"Choose when AltirraSDL may contact ScreenScraper.fr for game "
+				"information and artwork. The service receives the game filename, "
+				"file size, CRC32, selected Atari system, and your public IP. "
+				"Game files are never uploaded.");
+			ImGui::Spacing();
+
+			// On Demand is the recommended preselection. Merely rendering the
+			// page does not record consent; pressing Next confirms the visible
+			// choice through Wiz_ConfirmMetadataChoice().
+			int mode = m.mbConsentRecorded
+				? (int)m.mAccessMode
+				: (int)ATMetadataAccessMode::OnDemand;
+			bool choiceMade = false;
+			if (ImGui::RadioButton("Download on demand (recommended)",
+				mode == (int)ATMetadataAccessMode::OnDemand)) {
+				mode = (int)ATMetadataAccessMode::OnDemand;
+				choiceMade = true;
+			}
+			ImGui::TextDisabled("  Connect only after you click Get Metadata.");
+			ImGui::Spacing();
+			if (ImGui::RadioButton("Automatic for newly added games",
+				mode == (int)ATMetadataAccessMode::Automatic)) {
+				mode = (int)ATMetadataAccessMode::Automatic;
+				choiceMade = true;
+			}
+			ImGui::TextDisabled("  Automatically look up additions of up to 25 games.");
+			ImGui::Spacing();
+			if (ImGui::RadioButton("Disabled",
+				mode == (int)ATMetadataAccessMode::Disabled)) {
+				mode = (int)ATMetadataAccessMode::Disabled;
+				choiceMade = true;
+			}
+			ImGui::TextDisabled("  Never contact ScreenScraper.");
+
+			if (choiceMade) {
+				ATUIMetadataSetAccessMode((ATMetadataAccessMode)mode);
+			}
+			if (!m.mbConsentRecorded)
+				ImGui::TextDisabled(
+					"Download on demand is selected. Click Next to confirm.");
+
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::TextDisabled("Artwork downloaded when metadata is requested:");
+			bool artworkDirty = false;
+			if (ImGui::Checkbox("Box art", &m.mbDownloadBoxArt)) artworkDirty = true;
+			ImGui::SameLine(180);
+			if (ImGui::Checkbox("Title screen", &m.mbDownloadTitleShot)) artworkDirty = true;
+			if (ImGui::Checkbox("Gameplay screenshot", &m.mbDownloadScreenshot)) artworkDirty = true;
+			if (artworkDirty) ATMetadataSaveSettings();
 			break;
 		}
 
@@ -1739,6 +1816,8 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 
 	if (canNext) {
 		if (ImGui::Button("Next >")) {
+			if (g_setupWiz.page == 3)
+				Wiz_ConfirmMetadataChoice();
 			g_setupWiz.wentPastFirst = true;
 			g_setupWiz.page = nextPage;
 		}

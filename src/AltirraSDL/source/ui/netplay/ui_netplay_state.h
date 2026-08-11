@@ -351,8 +351,9 @@ std::string HostedGameSignature(const std::string& path,
 std::string FriendlyLobbyError(const std::string& rawError, int httpStatus);
 
 // Load the user's lobby configuration from
-// $configDir/lobby.ini, writing the built-in defaults the first
-// time (so users can freely edit the URL, add mirrors, etc.).
+// $configDir/lobby.ini, writing the built-in defaults on the first
+// explicit Online Play use (so users can freely edit the URL, add
+// mirrors, etc.). Callers must be behind IsLobbyAccessActivated().
 // Falls back to in-memory defaults if the file can't be read/parsed.
 // Cached after first call — call ReloadLobbyConfig to re-read.
 const std::vector<ATNetplay::LobbyEntry>& GetConfiguredLobbies();
@@ -523,7 +524,7 @@ struct Browser {
 
 	// The one-shot refresh flag.  Set by the Refresh button or the
 	// 10 s auto-refresh timer; consumed by the lobby worker.
-	bool        refreshRequested = true;
+	bool        refreshRequested = false;
 
 	// Non-empty while a refresh is in flight.  The UI shows a spinner.
 	bool        refreshInFlight = false;
@@ -676,6 +677,11 @@ struct State {
 	// already in a session, and to show the End-Session path.
 	bool sessionActive = false;
 
+	// Outbound lobby access is opt-in for this process. Initialization
+	// loads local preferences only; an Online Play surface or explicit
+	// join/host deep-link activates network access.
+	bool lobbyAccessActivated = false;
+
 	// Pending selection from the Add-Game form / Library Picker.
 	// Shared between modes so the Library Picker (which may navigate
 	// away from Desktop AddOffer / Gaming AddOffer) can hand back a
@@ -693,6 +699,9 @@ std::string GenerateHostedGameId();
 // Accessors.  The state lives in a translation-unit-static singleton
 // in ui_netplay_state.cpp; tests can reset it via Shutdown().
 State& GetState();
+
+void ActivateLobbyAccess();
+bool IsLobbyAccessActivated();
 
 // One-time initialisation — loads Prefs from the registry and
 // generates an anonymous nickname if the user's last session was anon.

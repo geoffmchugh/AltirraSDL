@@ -573,7 +573,8 @@ void ATNetplayUI_Poll(uint64_t nowMs) {
 	const bool timeForAuto = onBrowser &&
 		((st.browser.lastFetchMs == 0)
 		 || (nowMs - st.browser.lastFetchMs) >= kAutoRefreshMs);
-	if (userAsked || (!backoffActive && timeForAuto)) {
+	if (st.lobbyAccessActivated
+		&& (userAsked || (!backoffActive && timeForAuto))) {
 		if (!st.browser.refreshInFlight) {
 			// Do not wipe items here — the response handler reconciles
 			// per-lobby (entries gone from the new response are retired,

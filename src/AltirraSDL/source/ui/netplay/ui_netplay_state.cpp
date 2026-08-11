@@ -86,6 +86,17 @@ std::string g_resolvedCache;
 
 State& GetState() { return g_state; }
 
+void ActivateLobbyAccess() {
+	if (g_state.lobbyAccessActivated)
+		return;
+
+	g_state.lobbyAccessActivated = true;
+}
+
+bool IsLobbyAccessActivated() {
+	return g_state.lobbyAccessActivated;
+}
+
 std::string GenerateAnonymousNickname() { return AnonName(); }
 
 const std::string& ResolvedNickname() {
@@ -723,12 +734,11 @@ void LoadLobbyConfigIntoCache() {
 	// public ad-blocker / DNS blocklists categorise duckdns.org as a
 	// dynamic-DNS service heavily abused for malware C2, so the
 	// browser refuses the WSS connection (close code 1006, closeMs<10).
-	// The default lobby.ini we ship now seeds the duckdns [backup]
-	// section with `enabled = false` for WASM, but users who first
-	// loaded an older build have the old `enabled = true` persisted in
-	// IDBFS — this loop catches that case and quietly migrates them.
-	// Native (desktop) builds keep duckdns enabled: the same browser
-	// blocklists don't apply to native socket transports.
+	// New default lobby.ini files disable the duckdns [backup] on every
+	// platform, but users who first loaded an older WASM build may have
+	// `enabled = true` persisted in IDBFS. This loop catches that case and
+	// quietly migrates it because browser blocklists make the endpoint
+	// unusable. Native builds preserve existing files as user choices.
 	for (auto& e : s_lobbyCache) {
 		if (e.kind != ATNetplay::LobbyKind::Http) continue;
 		// Lower-case URL substring search — the URL is a literal from
@@ -746,11 +756,14 @@ void LoadLobbyConfigIntoCache() {
 } // anonymous
 
 const std::vector<ATNetplay::LobbyEntry>& GetConfiguredLobbies() {
+	static const std::vector<ATNetplay::LobbyEntry> kNoLobbies;
+	if (!IsLobbyAccessActivated()) return kNoLobbies;
 	if (!s_lobbyCacheLoaded) LoadLobbyConfigIntoCache();
 	return s_lobbyCache;
 }
 
 void ReloadLobbyConfig() {
+	if (!IsLobbyAccessActivated()) return;
 	s_lobbyCacheLoaded = false;
 	LoadLobbyConfigIntoCache();
 }
@@ -776,10 +789,6 @@ std::string GenerateHostedGameId() {
 void Initialize() {
 	if (g_initialized) return;
 	g_initialized = true;
-
-	// Warm the lobby-config cache so $configDir/lobby.ini is created
-	// on first run even before the user opens a netplay window.
-	(void)GetConfiguredLobbies();
 
 	VDRegistryAppKey key("Netplay", true);
 
@@ -876,6 +885,11 @@ void Navigate(Screen next) {
 		g_state.screen = Screen::Closed;
 		return;
 	}
+
+	// Reaching a Netplay workflow is explicit user intent. Preferences
+	// alone is local-only; all other screens display or act on lobby state.
+	if (next != Screen::Prefs)
+		ActivateLobbyAccess();
 #if defined(__EMSCRIPTEN__)
 	// Broker mode contract: the browser (broker page + lobby) is the
 	// sole UX surface.  The emulator window must show only the

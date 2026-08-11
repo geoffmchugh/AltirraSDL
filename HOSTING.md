@@ -64,8 +64,24 @@ origin-aware defaults if no meta tag is present.
 Drop a `config.json` next to `AltirraSDL.html` to customise the
 first-run experience.  Every field is optional.
 
+For a dedicated build, select the deployment profile at configure time:
+
+```bash
+emcmake cmake -S . -B build/lobby \
+  -DALTIRRA_WASM=ON \
+  -DALTIRRA_WASM_HOST_CONFIG=src/AltirraSDL/cmake/wasm_config_lobby.json
+cmake --build build/lobby -j
+```
+
+Without `ALTIRRA_WASM_HOST_CONFIG`, CMake packages the standalone profile,
+which keeps lobby broker integration disabled. The profile remains a plain
+`config.json` in the output, so deployment automation may replace it without
+recompiling; the official lobby workflow does exactly that.
+
 ```json
 {
+  "deploymentMode": "lobby",
+  "enableLobbyBroker": true,
   "firmwareUrl": "https://example.com/firmware/xf25.zip",
   "lobbyHost":   "lobby.atari.org.pl",
   "lobbyUrl":    "/games/",
@@ -91,6 +107,18 @@ first-run experience.  Every field is optional.
 ```
 
 ### Schema
+
+- **`deploymentMode`** *(string, optional, default `standalone`)* —
+  identifies host integration. The official deployment uses `lobby`;
+  generic releases use `standalone`. Broker integration requires this
+  value together with `enableLobbyBroker: true`; neither setting causes
+  an eager lobby API request.
+
+- **`enableLobbyBroker`** *(boolean, optional, default `false`)* — allows
+  the host's explicit broker/Play Together deep links when
+  `deploymentMode` is `lobby`. A bare emulator launch remains
+  network-idle; broker, join, host, and Online Play actions are the
+  activation points.
 
 - **`firmwareUrl`** *(string, optional)* — operator-supplied firmware
   bundle URL.  When set, this URL is prepended to the first-run

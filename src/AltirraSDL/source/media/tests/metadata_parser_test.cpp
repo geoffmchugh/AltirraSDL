@@ -652,9 +652,27 @@ void TestDecodeEntitiesInParse() {
 		"no raw entity left in the synopsis");
 }
 
+void TestPrivacyDefaults() {
+	std::printf("metadata network defaults are on-demand\n");
+	const ATMetadataSettings s;
+	Check(s.mAccessMode == ATMetadataAccessMode::OnDemand,
+		"fresh settings use on-demand metadata access");
+	Check(!s.mbAutoFetchNewGames,
+		"fresh settings never auto-fetch newly added games");
+	Check(!s.mbConsentRecorded,
+		"fresh settings do not fabricate user consent");
+	Check(ATMetadataNetworkAllowed(s),
+		"on-demand mode permits explicit metadata requests");
+	ATMetadataSettings disabled = s;
+	disabled.mAccessMode = ATMetadataAccessMode::Disabled;
+	Check(!ATMetadataNetworkAllowed(disabled),
+		"disabled mode forbids ScreenScraper network requests");
+}
+
 }  // namespace
 
 int main() {
+	TestPrivacyDefaults();
 	TestFullHit();
 	TestRegionPreference();
 	TestNoMedia();

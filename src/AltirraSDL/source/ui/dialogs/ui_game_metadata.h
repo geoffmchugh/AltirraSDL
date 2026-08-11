@@ -12,6 +12,7 @@
 class ATGameLibrary;
 struct GameEntry;
 enum class GameMetaStatus : unsigned char;
+enum class ATMetadataAccessMode : int;
 
 // --- Shared fact lines -----------------------------------------------
 //
@@ -68,6 +69,10 @@ void ATUIMetadataPumpAccountTest();
 void ATUIMetadataShutdownAccountTest();
 
 // --- Shared actions --------------------------------------------------
+
+// Apply and persist the network policy. Switching to Disabled also cancels
+// scraper work and any account test already in flight.
+void ATUIMetadataSetAccessMode(ATMetadataAccessMode mode);
 
 // Starts a run, wiring up the banner on failure.  `onlyMissing` false
 // means "everything", subject to the overwrite-user-edits setting.

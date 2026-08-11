@@ -376,6 +376,7 @@ static ATNetplay::LobbyEndpoint EndpointForLobby(const ATNetplay::LobbyEntry& e)
 }
 
 void EnqueueBrowserRefresh() {
+	if (!IsLobbyAccessActivated()) return;
 	const std::vector<ATNetplay::LobbyEntry>& lobbies = GetConfiguredLobbies();
 	for (const auto& e : lobbies) {
 		if (!e.enabled) continue;
@@ -394,6 +395,7 @@ void EnqueueBrowserRefresh() {
 // late response from an earlier cycle would fall into the new cycle's
 // accumulator and double-count.
 void EnqueueStatsRefresh() {
+	if (!IsLobbyAccessActivated()) return;
 	auto& a = GetState().aggregateStats;
 	if (a.pendingResponses > 0) return;
 

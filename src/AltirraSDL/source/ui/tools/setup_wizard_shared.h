@@ -63,6 +63,11 @@ extern SetupWizardState g_setupWiz;
 int  Wiz_GetPrevPage(int page);
 int  Wiz_GetNextPage(int page);
 
+// Commit the recommended On Demand metadata policy when the user continues
+// from page 3 without changing the preselected option. Merely rendering the
+// page does not record consent; the Next action is the confirmation.
+void Wiz_ConfirmMetadataChoice();
+
 // Drain async results from SDL file dialog callbacks.  Must run on the
 // main thread before page rendering — both renderers call this at the
 // top of their entry point.

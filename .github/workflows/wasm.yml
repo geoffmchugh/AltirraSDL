@@ -125,8 +125,8 @@ jobs:
           cp "${OUTDIR}/index.html"       "${DIST}/"
           cp "${OUTDIR}/AltirraSDL.js"    "${DIST}/"
           cp "${OUTDIR}/AltirraSDL.wasm"  "${DIST}/"
-          # config.json is the host config the first-run wizard reads
-          # (gamePacks list, firmware-URL override).  CMake copies it
+          # config.json is the deployment profile and first-run config
+          # (broker gate, gamePacks, firmware-URL override). CMake copies it
           # from src/AltirraSDL/cmake/wasm_config.json to the build
           # output as a sibling of AltirraSDL.html.  If it's missing
           # the wizard silently falls back to no-packs — non-fatal.
@@ -146,6 +146,12 @@ jobs:
             exit 1
           fi
           cp "${OUTDIR}/wasm_lib_deeplink.js" "${DIST}/"
+
+          # Parse the shipped scripts and verify that standalone broker URLs
+          # are rejected before any curated payload fetch, while the explicit
+          # lobby profile remains enabled.
+          node --check "${DIST}/wasm_lib_deeplink.js"
+          node tests/wasm/deployment_policy_test.js "${DIST}/index.html"
 
           # Embed kit — README, EMBED reference, and the example.html
           # iframe demo.  CMake copies these to ${OUTDIR}/embed/; we
@@ -346,31 +352,24 @@ jobs:
           fi
 
       - if: steps.pf.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.pf.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           name: wasm-dist
           path: wasm-dist
 
-      # Inject the canonical lobby's config.json into the staging tree
-      # so the page-bar Lobby button shows on lobby.atari.org.pl and
-      # navigates to the welcome page (/AltirraSDL/, served from
-      # /var/www/altirra-sdl-page).  We do this ONLY here in the
-      # deploy-vm job so the GitHub Pages mirror (deploy-pages) and
-      # the downloadable AltirraSDL-wasm.zip stay config-less — a
-      # self-hoster who copies the bundle to their own site sees no
-      # Lobby button by default and never 404s.  Self-hosters who DO
-      # want a back-link drop their own config.json with their own
-      # `lobbyUrl` (and optional `lobbyLabel`) — see HOSTING.md.
-      - name: Inject canonical config.json (lobby button → /AltirraSDL/)
+      # Replace the artifact's standalone config with the canonical lobby
+      # profile only in this deployment job. GitHub Pages and the download
+      # keep the generic profile, which has no Lobby button, broker
+      # integration, or advertised game packs.
+      - name: Inject lobby deployment profile
         if: steps.pf.outputs.skip != 'true'
         run: |
-          set -e
-          cat > wasm-dist/config.json <<'EOF'
-          {
-            "lobbyUrl":   "/AltirraSDL/",
-            "lobbyLabel": "⬅ Lobby"
-          }
-          EOF
+          set -euo pipefail
+          cp src/AltirraSDL/cmake/wasm_config_lobby.json \
+             wasm-dist/config.json
           echo "Wrote canonical config.json:"
           cat wasm-dist/config.json
 

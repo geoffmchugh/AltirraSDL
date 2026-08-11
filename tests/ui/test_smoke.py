@@ -51,6 +51,11 @@ class TestConnection:
         assert "sim" in state["state"]
         assert "windows" in state["state"]
 
+    def test_no_lobby_access_at_startup(self, emu: AltirraTestHarness):
+        """Netplay being compiled in must not imply outbound lobby access."""
+        state = emu.query_state()["state"]
+        assert state["network"]["lobbyAccessActivated"] is False
+
     def test_list_dialogs(self, emu: AltirraTestHarness):
         resp = emu.send("list_dialogs")
         assert resp["ok"] is True

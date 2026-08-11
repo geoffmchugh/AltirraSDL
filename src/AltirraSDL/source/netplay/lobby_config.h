@@ -51,7 +51,8 @@ size_t ParseLobbyIni(const char* text, size_t len,
                      std::vector<LobbyEntry>& out,
                      std::vector<std::string>* warnings);
 
-// Default contents written on first run (production lobby + LAN entry).
+// Default contents written on first Online Play use (production lobby + LAN
+// entry).  Merely starting AltirraSDL does not create or load this file.
 // Null-terminated, plain ASCII.
 extern const char* const kDefaultLobbyIni;
 
