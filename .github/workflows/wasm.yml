@@ -12,12 +12,11 @@ name: WebAssembly build
 #   - Single-threaded: no -pthread / SharedArrayBuffer, which means the
 #     site works on any plain static host (GitHub Pages, Netlify, S3
 #     bucket, self-hosted Nginx) without COOP/COEP headers.
-#   - Netplay, AltirraBridge, and librashader are forced OFF by the
-#     CMake logic; they need infrastructure we cannot provide in-browser
-#     (UDP sockets, OS-level scripting endpoints, external .so/.dylib).
-#   - Rendering uses SDL_Renderer on WebGL2; the direct GL / ES3
-#     display backend and imgui_impl_opengl3 are excluded because their
-#     glXxx symbols clash with Emscripten's WebGL stubs at wasm-ld.
+#   - Netplay uses the browser WSS transport; raw UDP, LAN discovery, and
+#     native NAT traversal are excluded. AltirraBridge and librashader are
+#     forced OFF because they require OS sockets or native shared libraries.
+#   - Rendering uses the direct GLES3 display backend over WebGL2, including
+#     built-in screen effects. External librashader presets remain unavailable.
 #   - Persistence is per-origin via IDBFS (Emscripten's IndexedDB-backed
 #     filesystem).  User-uploaded games and firmware live under /persist
 #     in the virtual filesystem and survive page reloads.

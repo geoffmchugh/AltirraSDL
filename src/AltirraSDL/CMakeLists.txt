@@ -213,7 +213,7 @@ target_sources(AltirraSDL PRIVATE
 
     # Emote / Online Play source files previously listed here moved into
     # the ALTIRRA_NETPLAY block below — they reference netplay symbols and
-    # must not be compiled when netplay is disabled (WASM).
+    # must not be compiled when ALTIRRA_NETPLAY is explicitly disabled.
 
     # Registry persistence (filtered out by ui* regex, so add explicitly)
     ${CMAKE_SOURCE_DIR}/src/Altirra/source/uiregistry.cpp
