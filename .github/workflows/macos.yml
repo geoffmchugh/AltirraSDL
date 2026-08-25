@@ -78,6 +78,13 @@ jobs:
           # macos-release preset uses the default generator (Unix Makefiles)
           # so no extra build tools are needed.
 
+      - name: Ensure FFmpeg configure dependency
+        run: |
+          if ! command -v pkg-config >/dev/null 2>&1; then
+            brew install pkg-config
+          fi
+          pkg-config --version
+
       # Cache the FetchContent _deps tree (SDL3 source + intermediate
       # objects).  Keyed by arch so the two matrix jobs don't collide,
       # and by top-level CMake files so a CMake change invalidates.

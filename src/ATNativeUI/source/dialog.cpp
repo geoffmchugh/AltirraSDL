@@ -2624,6 +2624,33 @@ VDZINT_PTR VDDialogFrameW32::DlgProc(VDZUINT msg, VDZWPARAM wParam, VDZLPARAM lP
 			}
 			break;
 
+		case ATWM_PREKEYDOWN:
+		case ATWM_PRESYSKEYDOWN:
+			// If we are a child window, we won't get the PRETRANSLATE message. But most of the time, child
+			// dialogs don't have an accelerator table, so test that first
+			if (mAccel && GetAncestor(mhdlg, GA_PARENT) != nullptr) {
+				MSG m {};
+				m.hwnd = mhdlg;
+
+				switch(msg) {
+					case ATWM_PREKEYDOWN:
+						m.message = WM_KEYDOWN;
+						break;
+
+					case ATWM_PRESYSKEYDOWN:
+						m.message = WM_SYSKEYDOWN;
+						break;
+				}
+
+				m.wParam = wParam;
+				m.lParam = lParam;
+				if (TranslateAccelerator(mhdlg, mAccel, &m)) {
+					SetWindowLongPtr(mhdlg, DWLP_MSGRESULT, TRUE);
+					return TRUE;
+				}
+			}
+			break;
+
 		case WM_CTLCOLORSTATIC:
 			if (HBRUSH hbrush = mMsgDispatcher.TryDispatch_WM_CTLCOLORSTATIC(wParam, lParam))
 				return (INT_PTR)hbrush;

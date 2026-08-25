@@ -175,6 +175,11 @@
 			</ArrayItems>
 		</Expand>		
 	</Type>
+
+  <Type Name="vdfuncbase">
+    <DisplayString Condition="!mpFn">null</DisplayString>
+    <DisplayString>set</DisplayString>
+  </Type>
 	
 	<Type Name="VDRect&lt;*&gt;">
 		<DisplayString>({left},{top})-({right},{bottom}) [{right-left}x{bottom-top}]</DisplayString>

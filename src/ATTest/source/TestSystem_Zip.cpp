@@ -201,6 +201,11 @@ DEFINE_TEST_NONAUTO(System_ZipBenchQ) {
 	return 0;
 }
 
+DEFINE_TEST_NONAUTO(System_ZipBenchF) {
+	ATTestSystem_ZipBench<VDDeflateCompressionLevel::Filtered>();
+	return 0;
+}
+
 DEFINE_TEST_NONAUTO(System_ZipBenchX) {
 	ATTestSystem_ZipBench<VDDeflateCompressionLevel::Best>();
 	return 0;
@@ -378,6 +383,7 @@ DEFINE_TEST_NONAUTO(System_ZipBenchCompress) {
 
 	testBench("10MB zero data", L"10mb-zero-x.gz", VDDeflateCompressionLevel::Best);
 	testBench("10MB zero data (quick)", L"10mb-zero-q.gz", VDDeflateCompressionLevel::Quick);
+	testBench("10MB zero data (filt)", L"10mb-zero-f.gz", VDDeflateCompressionLevel::Filtered);
 
 	uint32 seed = 1;
 	for(uint8& v : buf) {
@@ -386,6 +392,7 @@ DEFINE_TEST_NONAUTO(System_ZipBenchCompress) {
 
 	testBench("10MB repeated data", L"10mb-repeat-x.gz", VDDeflateCompressionLevel::Best);
 	testBench("10MB repeated data (quick)", L"10mb-repeat-q.gz", VDDeflateCompressionLevel::Quick);
+	testBench("10MB repeated data (filt)", L"10mb-repeat-f.gz", VDDeflateCompressionLevel::Filtered);
 
 	seed = 1;
 	for(uint8& v : buf) {
@@ -396,6 +403,7 @@ DEFINE_TEST_NONAUTO(System_ZipBenchCompress) {
 
 	testBench("10MB random 4-bit data", L"10mb-4bitrand-x.gz", VDDeflateCompressionLevel::Best);
 	testBench("10MB random 4-bit data (quick)", L"10mb-4bitrand-q.gz",VDDeflateCompressionLevel::Quick);
+	testBench("10MB random 4-bit data (filt)", L"10mb-4bitrand-f.gz", VDDeflateCompressionLevel::Filtered);
 	testBench("10MB random 4-bit data (stored)", L"10mb-4bitrand-s.gz", VDDeflateCompressionLevel::Store);
 
 	seed = 1;
@@ -408,7 +416,8 @@ DEFINE_TEST_NONAUTO(System_ZipBenchCompress) {
 
 	testBench("10MB random 8-bit data", L"10mb-8bitrand-x.gz", VDDeflateCompressionLevel::Best);
 	testBench("10MB random 8-bit data (quick)", L"10mb-8bitrand-x.gz", VDDeflateCompressionLevel::Quick);
-	testBench("10MB random 8-bit data (stored)", L"10mb-8bitrand-x.gz", VDDeflateCompressionLevel::Store);
+	testBench("10MB random 8-bit data (filt)", L"10mb-8bitrand-f.gz", VDDeflateCompressionLevel::Filtered);
+	testBench("10MB random 8-bit data (stored)", L"10mb-8bitrand-s.gz", VDDeflateCompressionLevel::Store);
 
 	return 0;
 }

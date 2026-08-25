@@ -104,8 +104,10 @@ LRESULT ATUIDebuggerPaneWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) 
 VDZINT_PTR ATUIDebuggerPaneDialog::DlgProc(VDZUINT msg, VDZWPARAM wParam, VDZLPARAM lParam) {
 	auto r = ATUIDebuggerPane::TryHandleMessage(msg, wParam, lParam);
 
-	if (r.has_value())
-		return r.value();
+	if (r.has_value()) {
+		SetWindowLongPtr(mhdlg, DWLP_MSGRESULT, r.value());
+		return TRUE;
+	}
 
 	return ATUIPaneDialogBase::DlgProc(msg, wParam, lParam);
 }

@@ -705,17 +705,38 @@ bool RenderPrinterHLEConfig(ATPropertySet& props, ATDeviceConfigState& st) {
 bool RenderPrinterFX80Config(ATPropertySet& props, ATDeviceConfigState& st) {
 	if (st.justOpened) {
 		st.check[0] = props.GetBool("slashed_zero", false);
-		st.check[1] = props.GetBool("auto_lf", false);
+		st.check[1] = props.GetBool("compressed_on", false);
+		st.check[2] = props.GetBool("emphasize_on", false);
+		st.check[3] = props.GetBool("skip_on", false);
+		st.check[4] = props.GetBool("auto_lf", false);
+		st.check[5] = props.GetBool("paper_ht12", false);
+		st.combo[0] = std::clamp(props.GetInt32("intl_mode", 0), 0, 7);
 	}
 
-	ImGui::Checkbox("SW1-2 Enable slashed zero", &st.check[0]);
-	ImGui::Checkbox("SW2-4 Automatic line feed (LF on CR)", &st.check[1]);
+	ImGui::Checkbox("SW1-1 Enable slashed zero", &st.check[0]);
+	ImGui::Checkbox("SW1-2 Compressed mode default on", &st.check[1]);
+	ImGui::Checkbox("SW1-5 Emphasized mode default on", &st.check[2]);
+	ImGui::Checkbox("SW2-3 Skip perforation default on", &st.check[3]);
+	ImGui::Checkbox("SW2-4 Automatic line feed (LF on CR)", &st.check[4]);
+	ImGui::Checkbox("J5 Use 12-inch paper height", &st.check[5]);
+
+	static const char *const kIntlModeLabels[] = {
+		"USA", "France", "Germany", "United Kingdom", "United Denmark",
+		"Sweden", "Italy", "Spain"
+	};
+	ImGui::Combo("International Mode", &st.combo[0], kIntlModeLabels,
+		8);
 
 	ImGui::Separator();
 	if (ImGui::Button("OK", ImVec2(120, 0))) {
 		props.Clear();
 		if (st.check[0]) props.SetBool("slashed_zero", true);
-		if (st.check[1]) props.SetBool("auto_lf", true);
+		if (st.check[1]) props.SetBool("compressed_on", true);
+		if (st.check[2]) props.SetBool("emphasize_on", true);
+		if (st.check[3]) props.SetBool("skip_on", true);
+		if (st.check[4]) props.SetBool("auto_lf", true);
+		if (st.check[5]) props.SetBool("paper_ht12", true);
+		if (st.combo[0]) props.SetInt32("intl_mode", st.combo[0]);
 		return true;
 	}
 	ImGui::SameLine();

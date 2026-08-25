@@ -381,15 +381,19 @@ protected:
 };
 
 enum class VDDeflateCompressionLevel : uint8 {
+	// Optimize for speed at the expense of compression ratio.
 	Quick,
+
+	// Optimize for compression ratio at the expense of speed.
 	Best,
+
+	// Optimize for larger 6+ byte matches only, using heuristics similar to
+	// zlib's Z_FILTERED. Used specifically for PNG encoding.
+	Filtered,
+
+	// Do not compress, use stored blocks only.
 	Store
 };
-
-inline bool operator< (VDDeflateCompressionLevel a, VDDeflateCompressionLevel b) { return (uint8)a <  (uint8)b; }
-inline bool operator<=(VDDeflateCompressionLevel a, VDDeflateCompressionLevel b) { return (uint8)a <= (uint8)b; }
-inline bool operator> (VDDeflateCompressionLevel a, VDDeflateCompressionLevel b) { return (uint8)a >  (uint8)b; }
-inline bool operator>=(VDDeflateCompressionLevel a, VDDeflateCompressionLevel b) { return (uint8)a >= (uint8)b; }
 
 enum class VDDeflateChecksumMode : uint8 {
 	None,
@@ -402,10 +406,6 @@ enum class VDDeflateChecksumMode : uint8 {
 // stream; no header is added. A CRC-32 is computed on the uncompressed
 // data, as needed for gzip and zip, but different than the Adler-32
 // used by zlib and png.
-//
-// The compression heuristics are tuned toward generic binary data.
-// PNG typically uses different heuristics aimed at longer matches,
-// such as Z_FILTERED in zlib.
 //
 class VDDeflateStream final : public IVDStream {
 	VDDeflateStream(const VDDeflateStream&) = delete;

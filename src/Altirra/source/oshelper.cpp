@@ -506,6 +506,20 @@ void ATUIEnableEditControlAutoComplete(void *hwnd) {
 		SHAutoComplete((HWND)hwnd, SHACF_FILESYSTEM | SHACF_AUTOAPPEND_FORCE_OFF);
 }
 
+int ATUIGetVerticalScrollLinesPerClick() {
+	UINT lines = 1;
+	::SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &lines, FALSE);
+
+	return lines == WHEEL_PAGESCROLL ? -1 : (int)lines;
+}
+
+int ATUIGetHorizontalScrollCharsPerClick() {
+	UINT chars = 1;
+	::SystemParametersInfo(SPI_GETWHEELSCROLLCHARS, 0, &chars, FALSE);
+
+	return chars == WHEEL_PAGESCROLL ? -1 : (int)chars;
+}
+
 VDStringW ATGetHelpPath() {
 	return VDMakePath(VDGetProgramPath().c_str(), L"Altirra.chm");
 }

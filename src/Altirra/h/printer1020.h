@@ -92,6 +92,7 @@ private:
 	void AddPenChangeAction(uint32 penIndex);
 	DrawingAction& AddAction();
 	void ProcessNextDrawingAction();
+	void FlushPenUpDown();
 
 	static constexpr auto kEventId_DrawingAction = kEventId_SubclassFirst;
 
@@ -163,6 +164,8 @@ private:
 	sint32 mDrawTotalCycles = 0;
 	sint32 mDrawCurrentSpanCycles = 0;
 	float mLastHeadDirection = 0;
+	bool mbDrawRequestedPenDown = false;
+	bool mbDrawActualPenDown = false;
 };
 
 #endif

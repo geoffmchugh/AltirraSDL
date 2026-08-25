@@ -1270,6 +1270,9 @@ void ATDevicePrinter1020::ProcessNextDrawingAction() {
 						break;
 					}
 
+					// flush pen up/down
+					FlushPenUpDown();
+
 					// play sound if head direction has reversed
 					if (deltaVec.x != 0) {
 						if (mbSoundEnabled && mbAccurateTimingEnabled && mLastHeadDirection * deltaVec.x < 0)
@@ -1308,16 +1311,12 @@ void ATDevicePrinter1020::ProcessNextDrawingAction() {
 				}
 
 				case DrawingActionType::PenDown:
-					if (mbSoundEnabled && mbAccurateTimingEnabled)
-						mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PenDown, false, 0, 0, 1.0f);
-
+					mbDrawRequestedPenDown = true;
 					++mNextDrawingActionIndex;
 					break;
 
 				case DrawingActionType::PenUp:
-					if (mbSoundEnabled && mbAccurateTimingEnabled)
-						mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PenUp, false, 0, 0, 1.0f);
-
+					mbDrawRequestedPenDown = false;
 					++mNextDrawingActionIndex;
 					break;
 
@@ -1353,4 +1352,22 @@ void ATDevicePrinter1020::ProcessNextDrawingAction() {
 
 		mFIFOLevel = 0;
 	}
+
+	// on idle, flush pen up
+	FlushPenUpDown();
+}
+
+void ATDevicePrinter1020::FlushPenUpDown() {
+	if (mbDrawRequestedPenDown == mbDrawActualPenDown)
+		return;
+
+	mbDrawActualPenDown = mbDrawRequestedPenDown;
+
+	if (!mbSoundEnabled || !mbAccurateTimingEnabled)
+		return;
+
+	if (mbDrawActualPenDown)
+		mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PenDown, false, 0, 0, 1.0f);
+	else
+		mPrinterSoundSource.ScheduleSound(kATAudioSampleId_Printer1020PenUp, false, 0, 0, 1.0f);
 }

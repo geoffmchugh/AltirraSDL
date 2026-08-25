@@ -40,9 +40,20 @@ void ATDevicePrinterFX80::GetDeviceInfo(ATDeviceInfo& info) {
 }
 
 void ATDevicePrinterFX80::Init() {
+	RecreateGraphicsOutput();
+}
+
+void ATDevicePrinterFX80::RecreateGraphicsOutput() {
+	mpGraphicsOutput = nullptr;
+
 	ATPrinterGraphicsSpec spec {};
 	spec.mPageWidthMM = 215.9f;				// 8.5" wide paper
-	spec.mPageVBorderMM = kPaperLeftMarginMM<float>;				// vertical border
+	spec.mPageHeightMM = mbPaperHeightSetting ? 25.4f * 12.0f : 25.4f * 11.0f;
+
+	// The default vertical border isn't symmetric with the horizontal border
+	// because the printer has an option for a 1" perforation skip, so we
+	// should default to half an inch.
+	spec.mPageVBorderMM = 0.5f * 25.4f;
 	spec.mLeftMarginMM = kPaperLeftMarginMM<float>;
 	spec.mDotRadiusMM = 0.22f;				// guess for dot radius
 	spec.mVerticalDotPitchMM = 25.4f / 72.0f;	// 1/72"
@@ -64,11 +75,40 @@ void ATDevicePrinterFX80::GetSettings(ATPropertySet& settings) {
 
 	if (mbSlashedZero)
 		settings.SetBool("slashed_zero", true);
+
+	if (mbCompressedSetting)
+		settings.SetBool("compressed_on", true);
+
+	if (mbEmphasizeSetting)
+		settings.SetBool("emphasize_on", true);
+
+	if (mbSkipPerforationSetting)
+		settings.SetBool("skip_on", true);
+
+	if (mIntlModeSetting != 0)
+		settings.SetInt32("intl_mode", mIntlModeSetting);
+
+	if (mbPaperHeightSetting)
+		settings.SetBool("paper_ht12", true);
 }
 
 bool ATDevicePrinterFX80::SetSettings(const ATPropertySet& settings) {
 	mbAutoLF = settings.GetBool("auto_lf", false);
 	mbSlashedZero = settings.GetBool("slashed_zero", false);
+	mbSkipPerforationSetting = settings.GetBool("skip_on", false);
+	mbCompressedSetting = settings.GetBool("compressed_on", false);
+	mbEmphasizeSetting = settings.GetBool("emphasize_on", false);
+	mIntlModeSetting = settings.GetInt32("intl_mode", 0) & 7;
+
+	// If the paper height setting changes, recreate the graphics output.
+	const bool paperHeightSetting = settings.GetBool("paper_ht12", false);
+
+	if (mbPaperHeightSetting != paperHeightSetting) {
+		mbPaperHeightSetting = paperHeightSetting;
+
+		if (mpGraphicsOutput)
+			RecreateGraphicsOutput();
+	}
 
 	return true;
 }
@@ -123,14 +163,14 @@ void ATDevicePrinterFX80::ResetState() {
 	mEighthBitXorMask = 0x00;
 	mbIntlCharsEnabled = false;
 	mbItalicIntlCharsEnabled = false;
-	mIntlCharMode = 0;
+	mIntlCharMode = mIntlModeSetting;
 
 	mbExpandedCurrentLine = false;
 	mbExpandedAlways = false;
-	mbCompressed = false;
+	mbCompressed = mbCompressedSetting;
 	mbElite = false;
 	mbProportional = false;
-	mbEmphasized = false;
+	mbEmphasized = mbEmphasizeSetting;
 	mbDoubleStrike = false;
 	mbUnderline = false;
 	mbItalic = false;
@@ -141,8 +181,11 @@ void ATDevicePrinterFX80::ResetState() {
 	mYPos = 0;
 	mPrintXPos = 0;
 
-	// default to 11" paper
-	mFormHeightUnits = 216 * 11;
+	// Default to 11" or 12" paper depending on J5 jumper.
+	mFormHeightUnits = mbPaperHeightSetting ? 216 * 12 : 216 * 11;
+
+	// Default skip 1" perforation if enabled by SW2-3.
+	mPerforationSkipDistance = mbSkipPerforationSetting ? 216 : 0;
 
 	mNumCustomHTabs = -1;
 	mCustomVTabChannel = 0;
@@ -430,6 +473,13 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdIntlChars);
 			break;
 
+		case 0x4A:	// ESC J	Immediate temporary line feed
+			FlushPrintBuffer();
+			// MERGE NOTE: test18 called the handler before consuming ESC J's
+			// argument. Queue it so the requested feed distance is used.
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdImmediateTempLF);
+			break;
+
 		case 0x4B:	// ESC K	Single-density graphics (redefinable)
 			ProcessCmdGraphics(mRedefinableGraphicsModes[0]);
 			break;
@@ -500,6 +550,13 @@ void ATDevicePrinterFX80::ProcessEsc(uint8 ch) {
 
 		case 0x62:	// ESC b	Set vertical tabs for channel n
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdSetVerticalTabChannel);
+			// MERGE NOTE: keep ESC b from falling through to the new ESC i case.
+			break;
+
+		case 0x69:	// ESC i	Turn immediate mode on/off
+			FlushPrintBuffer();
+			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdImmediateMode);
+			break;
 
 		case 0x6A:	// ESC j	Reverse feed n/216"
 			BeginCommand(1, &ATDevicePrinterFX80::ProcessCmdReverseFeed);
@@ -627,7 +684,7 @@ void ATDevicePrinterFX80::ProcessCmdDefineCharacters() {
 
 	// copy over columns, applying descender shift if needed -- note that we are
 	// leaving column 12 blank, as it always is
-	const bool descender = (mCommandArgBuf[3] & 0x80) != 0;
+	const bool descender = !(mCommandArgBuf[3] & 0x80);
 
 	for(int i=0; i<11; ++i) {
 		const uint16 pins = mCommandArgBuf[4 + i];
@@ -769,6 +826,14 @@ void ATDevicePrinterFX80::ProcessCmdHorizontalTab() {
 				break;
 		}
 	}
+}
+
+void ATDevicePrinterFX80::ProcessCmdImmediateMode() {
+	// Nothing to do -- the argument is currently ignored.
+}
+
+void ATDevicePrinterFX80::ProcessCmdImmediateTempLF() {
+	FeedPaper(mCommandArgBuf[0]);
 }
 
 void ATDevicePrinterFX80::ProcessCmdIntlChars() {
@@ -1161,7 +1226,7 @@ void ATDevicePrinterFX80::BufferChar(uint8 ch) {
 	// one. However, we then need to recompute the char width, because the
 	// expanded state can reset (!).
 	sint32 charWidth = GetCharWidth(ch);
-	if (mXPos + charWidth >= kMaxWidthUnits - mRightMarginUnits) {
+	if (mXPos + charWidth > kMaxWidthUnits - mRightMarginUnits) {
 		PrintLF();
 		charWidth = GetCharWidth(ch);
 	}

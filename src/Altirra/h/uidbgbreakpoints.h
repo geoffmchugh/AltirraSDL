@@ -26,6 +26,8 @@ class ATUIDebuggerBreakpointDialog final : public VDDialogFrameW32 {
 public:
 	ATUIDebuggerBreakpointDialog(sint32 userIdx);
 
+	sint32 GetBpUserIndex() const { return mUserIdx; }
+
 	bool OnLoaded() override;
 	void OnDataExchange(bool write) override;
 
@@ -71,10 +73,11 @@ public:
 private:
 	class BpListItem final : public vdrefcounted<IVDUIListViewVirtualItem> {
 	public:
-		BpListItem(const char *group, const ATDebuggerBreakpointInfo& bpInfo);
+		BpListItem(const char *group, uint32 userIdx, const ATDebuggerBreakpointInfo& bpInfo);
 
 		void GetText(int subItem, VDStringW& s) const override;
 
+		uint32 mUserNo = 0;
 		uint32 mUserIdx = 0;
 		VDStringW mIDStr;
 		VDStringW mTargetStr;

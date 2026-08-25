@@ -899,7 +899,7 @@ void VDDeflateHuffmanTable::BuildCode(int depth_limit) {
 	
 		for(int i = depth_limit-2; overallocation > 0; ) {
 			if (i < 0)
-				VDBREAK;
+				VDRaiseInternalFailure();
 
 			if (mCodesPerLen[i]) {
 				--mCodesPerLen[i];
@@ -918,7 +918,8 @@ void VDDeflateHuffmanTable::BuildCode(int depth_limit) {
 
 		for(int i = 1; underallocation > 0; ) {
 			if (i < 0 || i > 15)
-				VDBREAK;
+				VDRaiseInternalFailure();
+
 			if (mCodesPerLen[i] && (0x8000>>i) <= underallocation) {
 				underallocation -= (0x8000>>i);
 				--mCodesPerLen[i];
@@ -1197,6 +1198,12 @@ void VDDeflateEncoder::FlushToByteBoundary() {
 #define HASHN(pos) ((((uint32)VDReadUnalignedLEU32(&hist[(pos)]) & 0xFFFFFF) * 0x1CA73U) >> 16)
 #define HASHQ(pos) (((uint32)VDReadUnalignedLEU32(&hist[(pos)]) * 0x1CA73271U) >> 16)
 
+#if VD_PTR_SIZE >= 8
+#define HASHF(pos) (((((uint64)VDReadUnalignedLEU64(&hist[(pos)]) & UINT64_C(0x0000FFFFFFFFFFFF)) * 0x1CA73271U) >> 32) & 0xFFFF)
+#else
+#define HASHF(pos) ((((uint32)VDReadUnalignedLEU32(&hist[(pos)]) + (uint32)VDReadUnalignedLEU16(&hist[(pos) + 4])) * 0x1CA73271U) >> 16)
+#endif
+
 void VDDeflateEncoder::EndBlock(bool term) {
 	if (mpCode > mCodeBuf) {
 		if (mPendingLen) {
@@ -1211,9 +1218,16 @@ void VDDeflateEncoder::EndBlock(bool term) {
 					mHashTable[hval] = mHistoryPos;
 					++mHistoryPos;
 				}
-			} else {
+			} else if (mCompressionLevel == VDDeflateCompressionLevel::Best) {
 				while(bestlen-- > 0) {
 					int hval = HASHN(mHistoryPos);
+					mHashNext[mHistoryPos - 16] = mHashTable[hval];
+					mHashTable[hval] = mHistoryPos;
+					++mHistoryPos;
+				}
+			} else {
+				while(bestlen-- > 0) {
+					int hval = HASHF(mHistoryPos);
 					mHashNext[mHistoryPos - 16] = mHashTable[hval];
 					mHashTable[hval] = mHistoryPos;
 					++mHistoryPos;
@@ -1246,6 +1260,9 @@ void VDNOINLINE VDDeflateEncoder::Compress(bool flush) {
 		case VDDeflateCompressionLevel::Quick:
 			return Compress2<VDDeflateCompressionLevel::Quick>(flush);
 
+		case VDDeflateCompressionLevel::Filtered:
+			return Compress2<VDDeflateCompressionLevel::Filtered>(flush);
+
 		case VDDeflateCompressionLevel::Store:
 			return CompressStore(flush);
 	}
@@ -1264,11 +1281,14 @@ void VDDeflateEncoder::Compress2(bool flush) {
 	uint32 pos = mHistoryPos;
 	const uint32 len = mHistoryTail + 16;
 
-	static constexpr uint32 kHashLen = (T_CompressionLevel == VDDeflateCompressionLevel::Quick)
-		? 4 : 3;
+	static constexpr uint32 kHashLen
+		= (T_CompressionLevel == VDDeflateCompressionLevel::Quick) ? 4
+		: (T_CompressionLevel == VDDeflateCompressionLevel::Filtered) ? 6
+		: 3;
 
-	static constexpr uint32 kMatchMask = (T_CompressionLevel == VDDeflateCompressionLevel::Quick)
-		? 0xFFFFFFFF : 0x00FFFFFF;
+	static constexpr uint32 kMatchMask
+		= (T_CompressionLevel != VDDeflateCompressionLevel::Best) ? 0xFFFFFFFF
+		: 0x00FFFFFF;
 
 	const uint32 maxpos = flush ? len : len > 258+kHashLen ? len - (258+kHashLen) : 0;
 
@@ -1299,8 +1319,10 @@ void VDDeflateEncoder::Compress2(bool flush) {
 		
 		if constexpr (T_CompressionLevel == VDDeflateCompressionLevel::Quick)
 			hcode = HASHQ(pos);
-		else
+		else if constexpr (T_CompressionLevel == VDDeflateCompressionLevel::Best)
 			hcode = HASHN(pos);
+		else
+			hcode = HASHF(pos);
 
 		uint32 hpos = mHashTable[hcode];
 		uint32 limit = 258;
@@ -1504,8 +1526,10 @@ void VDDeflateEncoder::Compress2(bool flush) {
 
 				if constexpr (T_CompressionLevel == VDDeflateCompressionLevel::Quick)
 					hcode = HASHQ(pos);
-				else
+				else if constexpr (T_CompressionLevel == VDDeflateCompressionLevel::Best)
 					hcode = HASHN(pos);
+				else
+					hcode = HASHF(pos);
 
 				mHashNext[pos - 16] = mHashTable[hcode];
 				mHashTable[hcode] = pos;
@@ -1522,6 +1546,10 @@ void VDDeflateEncoder::Compress2(bool flush) {
 	// shift down by 16K
 	TryShiftWindow();
 }
+
+#undef HASHQ
+#undef HASHF
+#undef HASHN
 
 void VDDeflateEncoder::CompressStore(bool flush) {
 	if (!mHistoryTail)
@@ -2573,8 +2601,6 @@ template class VDInflateStream<true>;
 
 ///////////////////////////////////////////////////////////////////////////
 
-#pragma pack(push, 2)
-
 namespace {
 	enum {
 		kZipMethodStore		= 0,
@@ -2685,8 +2711,6 @@ namespace {
 
 	static_assert(sizeof(ZipCentralDir) == 22);
 }
-
-#pragma pack(pop)
 
 VDZipArchive::VDZipArchive() {
 }

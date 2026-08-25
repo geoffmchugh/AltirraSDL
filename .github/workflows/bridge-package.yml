@@ -314,6 +314,13 @@ jobs:
           clang --version
           uname -m
 
+      - name: Ensure FFmpeg configure dependency
+        run: |
+          if ! command -v pkg-config >/dev/null 2>&1; then
+            brew install pkg-config
+          fi
+          pkg-config --version
+
       - name: Cache CMake FetchContent dependencies
         uses: actions/cache@v4
         with:

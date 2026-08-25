@@ -537,18 +537,21 @@ BEGIN
             MENUITEM "&PNG Image (96 dpi)",         ID_SAVEAS_PNGIMAGE96
             MENUITEM "&PNG Image (300 dpi)",        ID_SAVEAS_PNGIMAGE300
             MENUITEM SEPARATOR
-            POPUP "P&DF Document"
-            BEGIN
-                MENUITEM "PDF (Auto)",                  ID_PDFDOCUMENT_AUTO
-                MENUITEM "PDF (US Letter, 8.5"" x 11"")", ID_PDFDOCUMENT_LETTER
-                MENUITEM "PDF (A4, 210mm x 297mm)",     ID_PDFDOCUMENT_A4
-                MENUITEM "PDF (Continuous 12"" / 305mm)", ID_PDFDOCUMENT_CONT12
-            END
+            MENUITEM "P&DF",                        ID_SAVEAS_PDF
             MENUITEM "&SVG 1.1 Document",           ID_SAVEAS_SVG
         END
         MENUITEM SEPARATOR
         MENUITEM "Reset View",                  ID_CONTEXT_RESETVIEW
         MENUITEM "Set Print &Position",         ID_CONTEXT_SETPRINTPOSITION
+        MENUITEM SEPARATOR
+        MENUITEM "Ctrl+Scroll to Zoom",         ID_CONTEXT_CTRLZOOM
+        POPUP "&Paper Type"
+        BEGIN
+            MENUITEM "&Auto",                       ID_PAPERTYPE_AUTO
+            MENUITEM "&Letter / Continuous 11 (8.5 x 11"")", ID_PAPERTYPE_LETTER
+            MENUITEM "Continuous 1&2 (8.5 x 12"")", ID_PAPERTYPE_CONT12
+            MENUITEM "&A4 (210 x 297 mm)",          ID_PAPERTYPE_A4
+        END
     END
 END
 
@@ -3979,6 +3982,11 @@ IDR_DEVICES_ACCEL ACCELERATORS
 BEGIN
     "C",            ID_COPY,                VIRTKEY, CONTROL, NOINVERT
     "V",            ID_PASTE,               VIRTKEY, CONTROL, NOINVERT
+END
+
+IDR_DBGBREAKPOINTS_ACCEL ACCELERATORS
+BEGIN
+    VK_DELETE,      ID_BREAKPOINT_DELETE,   VIRTKEY, NOINVERT
 END
 
 

@@ -62,6 +62,7 @@ private:
 		Emphasized = 0x100
 	};
 
+	void RecreateGraphicsOutput();
 	void ResetState();
 
 	void ProcessChar(uint8 ch);
@@ -81,6 +82,8 @@ private:
 	void ProcessCmdGraphics();
 	void ProcessCmdGraphics9Pin();
 	void ProcessCmdHorizontalTab();
+	void ProcessCmdImmediateMode();
+	void ProcessCmdImmediateTempLF();
 	void ProcessCmdIntlChars();
 	void ProcessCmdLeftMargin();
 	void ProcessCmdLineSpacingCoarse();
@@ -131,7 +134,7 @@ private:
 	static constexpr T kMMPerVertUnit = T(25.4 / 216.0f);
 
 	template<typename T>
-	static constexpr T kPaperLeftMarginMM = T(8.0);
+	static constexpr T kPaperLeftMarginMM = T(25.4f * 0.25f);
 
 	static constexpr sint32 kMaxWidthUnits = 5760;
 	static constexpr sint32 kWidthUnitsPerCharPica = 72;
@@ -186,6 +189,11 @@ private:
 
 	bool mbAutoLF = false;
 	bool mbSlashedZero = false;
+	bool mbSkipPerforationSetting = false;
+	bool mbCompressedSetting = false;
+	bool mbEmphasizeSetting = false;
+	uint8 mIntlModeSetting = 0;
+	bool mbPaperHeightSetting = false;
 
 	// Expanded doubles up all columns. It can be enabled only
 	// for the current line, or subsequent lines.

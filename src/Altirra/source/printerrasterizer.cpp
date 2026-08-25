@@ -126,7 +126,7 @@ void ATPrinterRasterizer::TrimBuffers() {
 
 std::optional<VDPixmap> ATPrinterRasterizer::Render(ATPrinterGraphicalOutput *outputOpt, const ViewTransform& viewTransform, sint32 x, sint32 y, uint32 w, uint32 h, bool force) {
 	if (!outputOpt || w <= 0 || h <= 0)
-		return force ? std::optional(RenderBlank(w, h)) : std::nullopt;
+		return force ? std::optional(RenderBlank(y, w, h, viewTransform)) : std::nullopt;
 
 	auto& output = *outputOpt;
 
@@ -152,10 +152,10 @@ std::optional<VDPixmap> ATPrinterRasterizer::Render(ATPrinterGraphicalOutput *ou
 	ATPrinterGraphicalOutput::CullInfo cullInfo;
 
 	if (!output.PreCull(cullInfo, vdrect32f(viewDocX1, viewDocY1, viewDocX2, viewDocY2)) && !hasVectors) {
-		if (!force)
+		if (!force && !VerticalRangeCrossesPagePerforation(viewDocY1, viewDocY2, viewTransform))
 			return std::nullopt;
 
-		return RenderBlank(w, h);
+		return RenderBlank(y, w, h, viewTransform);
 	}
 
 	const float dotRadiusMM = output.GetGraphicsSpec().mDotRadiusMM;
@@ -542,7 +542,12 @@ vectors_done:
 		}
 
 		// render antialiasing buffer row to framebuffer
-		Downsample8x8(&mFrameBuffer[fbWidth * (h - 1 - yoff)], abuf, w, hasVectors);
+		uint32 *fbline = &mFrameBuffer[fbWidth * (h - 1 - yoff)];
+		Downsample8x8(fbline, abuf, w, hasVectors);
+
+		// check if page height is specified
+		if (VerticalRangeCrossesPagePerforation(docRowY1, docRowY2, viewTransform))
+			RenderPagePerforation(fbline, w);
 	}
 
 	VDPixmap px {};
@@ -833,10 +838,34 @@ skip_dot:
 	AT_PRINTERRASTERIZER_SORT_TRACE("%u/%d dots removed\n", (unsigned)(mDotCullBuffer2.size() - i), (unsigned)mDotCullBuffer2.size());
 }
 
-std::optional<VDPixmap> ATPrinterRasterizer::RenderBlank(uint32 w, uint32 h) {
+std::optional<VDPixmap> ATPrinterRasterizer::RenderBlank(sint32 y, uint32 w, uint32 h, const ViewTransform& viewTransform) {
 	// clear framebuffer
 	mFrameBuffer.resize(w * h);
 	std::fill(mFrameBuffer.begin(), mFrameBuffer.end(), mGammaTable[0]);
+
+	// MERGE NOTE: test18 omitted mOriginY in the blank-render path, unlike
+	// the main render path, which displaced perforations for non-zero origins.
+	const float docY = viewTransform.mOriginY
+		+ (float)y * viewTransform.mMMPerPixel;
+
+	if (VerticalRangeCrossesPagePerforation(
+		docY,
+		docY + (float)h * viewTransform.mMMPerPixel,
+		viewTransform))
+	{
+		uint32 c = mGammaTable[0];
+		RenderPagePerforation(&c, 1);
+
+		for(sint32 i = 0; i < (sint32)h; ++i) {
+			float rowY = docY + (float)i * viewTransform.mMMPerPixel;
+
+			if (VerticalRangeCrossesPagePerforation(rowY, rowY + viewTransform.mMMPerPixel, viewTransform)) {
+				auto rowData = vdspan(mFrameBuffer).subspan(((h - 1) - i) * w, w);
+
+				std::fill(rowData.begin(), rowData.end(), c);
+			}
+		}
+	}
 
 	VDPixmap px {};
 	px.w = w;
@@ -845,6 +874,28 @@ std::optional<VDPixmap> ATPrinterRasterizer::RenderBlank(uint32 w, uint32 h) {
 	px.pitch = -(ptrdiff_t)w*4;
 	px.format = nsVDPixmap::kPixFormat_XRGB8888;
 	return px;
+}
+
+bool ATPrinterRasterizer::VerticalRangeCrossesPagePerforation(float y1, float y2, const ViewTransform& viewTransform) {
+	if (viewTransform.mPageHeightMM <= 0.0f)
+		return false;
+
+	// check if this line contains the line one half pixel before the end of a page
+	float linePerfOffset = fmodf(y2 + viewTransform.mMMPerPixel * 0.5f, viewTransform.mPageHeightMM);
+
+	if (linePerfOffset < 0.0f)
+		linePerfOffset += viewTransform.mPageHeightMM;
+
+	return linePerfOffset < y2 - y1;
+}
+
+void ATPrinterRasterizer::RenderPagePerforation(uint32 *dst, uint32 w) {
+	// darken the line by 1/4
+	for(uint32 x = 0; x < w; ++x) {
+		uint32 c = dst[x];
+
+		dst[x] = ((c & 0xfcfcfc) >> 2) * 3 + ((c & 0x020202) >> 1);
+	}
 }
 
 void ATPrinterRasterizer::RenderTrapezoid(const sint32 subSpans[2][8], uint32 linearColor, bool rgb) {

@@ -199,7 +199,7 @@ void ATUIDebuggerBreakpointDialog::OnDataExchange(bool write) {
 				bpInfo.mbBreakOnPC = true;
 		}
 
-		dbg.SetBreakpoint(mUserIdx, bpInfo);
+		mUserIdx = dbg.SetBreakpoint(mUserIdx, bpInfo);
 	}
 }
 
@@ -228,8 +228,9 @@ void ATUIDebuggerBreakpointDialog::UpdateEnableForActionTrace() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ATUIDebuggerPaneBreakpoints::BpListItem::BpListItem(const char *group, const ATDebuggerBreakpointInfo& bpInfo)
-	: mUserIdx(bpInfo.mNumber)
+ATUIDebuggerPaneBreakpoints::BpListItem::BpListItem(const char *group, uint32 userIdx, const ATDebuggerBreakpointInfo& bpInfo)
+	: mUserNo(bpInfo.mNumber)
+	, mUserIdx(userIdx)
 {
 	if (*group)
 		mIDStr.sprintf(L"%hs.%u", group, bpInfo.mNumber);
@@ -309,6 +310,7 @@ bool ATUIDebuggerPaneBreakpoints::OnLoaded() {
 	mResizer.Add(IDC_BPS, mResizer.kMC | mResizer.kAvoidFlicker);
 
 	AddProxy(&mBpView, IDC_BPS);
+	LoadAcceleratorTable(IDR_DBGBREAKPOINTS_ACCEL);
 
 	mBpView.SetFullRowSelectEnabled(true);
 	mBpView.InsertColumn(0, L"ID", 50);
@@ -363,6 +365,22 @@ void ATUIDebuggerPaneBreakpoints::InvalidateBreakpoints() {
 void ATUIDebuggerPaneBreakpoints::UpdateBreakpoints() {
 	mbBreakpointUpdatePending = false;
 
+	const int selIdx = mBpView.GetSelectedIndex();
+	const bool hasFocus = HasNestedFocus();
+
+	vdfastvector<uint32> prevUserIdxs;
+	vdfastvector<uint32> nextUserIdxs;
+	if (hasFocus) {
+		const int numExistingBps = mBpView.GetItemCount();
+
+		for(int i = 0; i < numExistingBps; ++i) {
+			BpListItem *item = static_cast<BpListItem *>(mBpView.GetVirtualItem(i));
+
+			if (item)
+				prevUserIdxs.push_back(item->mUserIdx);
+		}
+	}
+
 	mBpView.SetRedraw(false);
 	mBpView.Clear();
 
@@ -372,6 +390,7 @@ void ATUIDebuggerPaneBreakpoints::UpdateBreakpoints() {
 
 	std::sort(bpGroups.begin(), bpGroups.end(), vdstringpredi());
 
+	int numBps = 0;
 	for(const VDStringA& bpGroup : bpGroups) {
 		vdfastvector<uint32> bpIndices;
 		dbg.GetBreakpointList(bpIndices, bpGroup.c_str());
@@ -380,9 +399,36 @@ void ATUIDebuggerPaneBreakpoints::UpdateBreakpoints() {
 		for(uint32 bpIndex : bpIndices) {
 			dbg.GetBreakpointInfo(bpIndex, bpInfo);
 
-			mBpView.InsertVirtualItem(-1, new BpListItem(bpGroup.c_str(), bpInfo));
+			mBpView.InsertVirtualItem(-1, new BpListItem(bpGroup.c_str(), bpIndex, bpInfo));
+			++numBps;
+
+			if (hasFocus)
+				nextUserIdxs.push_back(bpIndex);
 		}
 	}
+
+	// If we have the focus, then focus the first new breakpoint if there is one. Otherwise, try
+	// to maintain the existing selection. The reason we have to do this is that the initiator
+	// of the breakpoint addition can be in a distant UI path due to keyboard shortcuts, so our
+	// own breakpoint-new handler may not have been involved.
+	if (hasFocus && nextUserIdxs.size() > prevUserIdxs.size()) {
+		std::sort(prevUserIdxs.begin(), prevUserIdxs.end());
+		std::sort(nextUserIdxs.begin(), nextUserIdxs.end());
+
+		const auto mismatch = std::mismatch(prevUserIdxs.begin(), prevUserIdxs.end(), nextUserIdxs.begin());
+
+		const uint32 newUserIdx = *mismatch.second;
+		for(int i = 0; i < numBps; ++i) {
+			BpListItem *item = static_cast<BpListItem *>(mBpView.GetVirtualItem(i));
+
+			if (item && item->mUserIdx == newUserIdx) {
+				mBpView.SetSelectedIndex(i);
+				break;
+			}
+		}
+
+	} else if (selIdx >= 0 && numBps > 0)
+		mBpView.SetSelectedIndex(std::min<int>(selIdx, numBps - 1));
 
 	mBpView.SetRedraw(true);
 }

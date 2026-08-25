@@ -17,6 +17,7 @@
 #include <vd2/system/binary.h>
 #include <vd2/system/color.h>
 #include <vd2/system/file.h>
+#include <vd2/system/registry.h>
 #include <vd2/system/strutil.h>
 #include <vd2/system/vdtypes.h>
 #include <vd2/system/VDString.h>
@@ -106,7 +107,8 @@ static void RenderPrinterOutput(
 	uint32 *framebuffer,
 	uint32 w, uint32 h,
 	float dotRadiusMM,
-	float pageWidthMM)
+	float pageWidthMM,
+	float pageHeightMM)
 {
 	if (w == 0 || h == 0)
 		return;
@@ -146,7 +148,7 @@ static void RenderPrinterOutput(
 	vdrect32f cullRect(docX1, docY1, docX2, docY2);
 	bool hasDots = output.PreCull(cullInfo, cullRect);
 
-	if (!hasDots && !hasVectors)
+	if (!hasDots && !hasVectors && pageHeightMM <= 0.0f)
 		return;
 
 	const float dotRadius = dotRadiusMM;
@@ -333,6 +335,24 @@ static void RenderPrinterOutput(
 			dst[x] = CompositePixel(dst[x], ink, coverage);
 		}
 	}
+
+	if (pageHeightMM > 0.0f) {
+		for(uint32 yoff = 0; yoff < h; ++yoff) {
+			const float rowY2 = docY1 + (float)(yoff + 1) * vt.mMMPerPixel;
+			float offset = fmodf(rowY2 + vt.mMMPerPixel * 0.5f, pageHeightMM);
+
+			if (offset < 0.0f)
+				offset += pageHeightMM;
+
+			if (offset < vt.mMMPerPixel) {
+				uint32 *row = &framebuffer[yoff * w];
+				for(uint32 x = 0; x < w; ++x) {
+					const uint32 c = row[x];
+					row[x] = ((c & 0xfcfcfc) >> 2) * 3 + ((c & 0x020202) >> 1);
+				}
+			}
+		}
+	}
 }
 
 struct PrinterSaveRequest {
@@ -382,7 +402,8 @@ private:
 	void *GetGraphicalImTextureID() const;
 
 	// Export
-	void RenderToFramebuffer(float dpi, std::vector<uint32> &fb, int &outW, int &outH);
+	void RenderToFramebuffer(float dpi, std::vector<uint32> &fb, int &outW,
+		int &outH, bool renderFullPage);
 	void ProcessPendingSave();
 
 	// Current output tracking
@@ -401,11 +422,15 @@ private:
 	float mViewMMPerPixel = 25.4f / 96.0f;
 	float mDotRadiusMM = 0;
 	float mPageWidthMM = 0;
+	float mPageHeightMM = 0;
+	float mPageOverrideWidthMM = 0; // Currently only used for PDF export.
+	float mPageOverrideHeightMM = 0;
 	float mPageVBorderMM = 0;
 	float mViewCursorY = 0;		// print head Y position (mm)
 	float mViewCursorYOffset = 0;	// baseline-to-head cursor offset (mm)
 
 	bool mbDragging = false;
+	bool mbCtrlToZoom = false;
 	float mDragLastX = 0;
 	float mDragLastY = 0;
 
@@ -447,6 +472,9 @@ private:
 ATImGuiPrinterOutputPaneImpl::ATImGuiPrinterOutputPaneImpl()
 	: ATImGuiDebuggerPane(kATUIPaneId_PrinterOutput, "Printer Output")
 {
+	VDRegistryAppKey key("Settings", false);
+	mbCtrlToZoom = key.getBool("Printer: Ctrl to zoom", false);
+
 	auto& mgr = static_cast<ATPrinterOutputManager&>(g_sim.GetPrinterOutputManager());
 
 	// Text output events — match Windows auto-attach behavior
@@ -576,6 +604,7 @@ void ATImGuiPrinterOutputPaneImpl::AttachToGraphicalOutput(int index) {
 
 	const ATPrinterGraphicsSpec& spec = mpCurrentGfxOutput->GetGraphicsSpec();
 	mPageWidthMM = spec.mPageWidthMM;
+	mPageHeightMM = spec.mPageHeightMM;
 	mPageVBorderMM = spec.mPageVBorderMM;
 	mDotRadiusMM = spec.mDotRadiusMM;
 	if (spec.mbBit0Top) {
@@ -678,7 +707,9 @@ void ATImGuiPrinterOutputPaneImpl::UpdateGraphicalTexture(uint32 w, uint32 h) {
 	vt.mMMPerPixel = mViewMMPerPixel;
 
 	RenderPrinterOutput(*mpCurrentGfxOutput, vt, mFramebuffer.data(), w, h,
-		mDotRadiusMM, mPageWidthMM);
+		mDotRadiusMM,
+		mPageWidthMM,
+		mPageOverrideHeightMM > 0.0f ? mPageOverrideHeightMM : mPageHeightMM);
 
 	// Drain the invalidation state so future Invalidate() calls will
 	// re-trigger the callback.  Without this, mbInvalidated stays true
@@ -754,13 +785,29 @@ void ATImGuiPrinterOutputPaneImpl::UpdateGraphicalTexture(uint32 w, uint32 h) {
 	mbGfxInvalidated = false;
 }
 
-void ATImGuiPrinterOutputPaneImpl::RenderToFramebuffer(float dpi, std::vector<uint32> &fb, int &outW, int &outH) {
+void ATImGuiPrinterOutputPaneImpl::RenderToFramebuffer(float dpi,
+	std::vector<uint32> &fb, int &outW, int &outH, bool renderFullPage) {
 	if (!mpCurrentGfxOutput) {
 		outW = outH = 0;
 		return;
 	}
 
+	const float pageWidthMM = renderFullPage && mPageOverrideWidthMM > 0.0f
+		? mPageOverrideWidthMM : mPageWidthMM;
+	const float pageHeightMM = renderFullPage && mPageOverrideHeightMM > 0.0f
+		? mPageOverrideHeightMM : mPageHeightMM;
+
 	vdrect32f docBounds = mpCurrentGfxOutput->GetDocumentBounds();
+	if (renderFullPage) {
+		if (pageWidthMM > 0.0f) {
+			docBounds.left = 0.0f;
+			docBounds.right = pageWidthMM;
+		}
+		if (pageHeightMM > 0.0f) {
+			docBounds.top = 0.0f;
+			docBounds.bottom = pageHeightMM;
+		}
+	}
 
 	// Ensure minimum size
 	if (docBounds.width() < 1.0f) docBounds.right = docBounds.left + 10.0f;
@@ -785,8 +832,10 @@ void ATImGuiPrinterOutputPaneImpl::RenderToFramebuffer(float dpi, std::vector<ui
 	vt.mPixelsPerMM = mmToInches * dpi;
 	vt.mMMPerPixel = 1.0f / vt.mPixelsPerMM;
 
+	// Perforation lines are a screen-preview aid; native PNG/PDF exports do
+	// not supply a page-height transform to the rasterizer.
 	RenderPrinterOutput(*mpCurrentGfxOutput, vt, fb.data(), outW, outH,
-		mDotRadiusMM, mPageWidthMM);
+		mDotRadiusMM, pageWidthMM, 0.0f);
 }
 
 void ATImGuiPrinterOutputPaneImpl::ProcessPendingSave() {
@@ -800,7 +849,7 @@ void ATImGuiPrinterOutputPaneImpl::ProcessPendingSave() {
 		case PrinterSaveRequest::Format::PNG96: {
 			std::vector<uint32> fb;
 			int w, h;
-			RenderToFramebuffer(96.0f, fb, w, h);
+			RenderToFramebuffer(96.0f, fb, w, h, false);
 			if (w > 0 && h > 0)
 				SaveFramebufferAsPNG(fb.data(), w, h, path.c_str());
 			break;
@@ -808,7 +857,7 @@ void ATImGuiPrinterOutputPaneImpl::ProcessPendingSave() {
 		case PrinterSaveRequest::Format::PNG300: {
 			std::vector<uint32> fb;
 			int w, h;
-			RenderToFramebuffer(300.0f, fb, w, h);
+			RenderToFramebuffer(300.0f, fb, w, h, false);
 			if (w > 0 && h > 0)
 				SaveFramebufferAsPNG(fb.data(), w, h, path.c_str());
 			break;
@@ -816,11 +865,15 @@ void ATImGuiPrinterOutputPaneImpl::ProcessPendingSave() {
 		case PrinterSaveRequest::Format::PDF: {
 			std::vector<uint32> fb;
 			int w, h;
-			RenderToFramebuffer(300.0f, fb, w, h);
+			RenderToFramebuffer(300.0f, fb, w, h, true);
 			if (w > 0 && h > 0) {
 				vdrect32f bounds = mpCurrentGfxOutput->GetDocumentBounds();
-				float docW = std::max(10.0f, bounds.width());
-				float docH = std::max(10.0f, bounds.height());
+				float docW = mPageOverrideWidthMM > 0.0f
+					? mPageOverrideWidthMM
+					: std::max(10.0f, mPageWidthMM > 0.0f ? mPageWidthMM : bounds.width());
+				float docH = mPageOverrideHeightMM > 0.0f
+					? mPageOverrideHeightMM
+					: std::max(10.0f, mPageHeightMM > 0.0f ? mPageHeightMM : bounds.height());
 				SaveFramebufferAsPDF(fb.data(), w, h, docW, docH, path.c_str());
 			}
 			break;
@@ -878,6 +931,40 @@ void ATImGuiPrinterOutputPaneImpl::RenderGraphicalOutput() {
 			ImGui::EndMenu();
 		}
 
+		if (ImGui::BeginMenu("Paper Type")) {
+			if (ImGui::MenuItem("Auto", nullptr,
+				mPageOverrideWidthMM == 0.0f && mPageOverrideHeightMM == 0.0f)) {
+				mPageOverrideWidthMM = 0.0f;
+				mPageOverrideHeightMM = 0.0f;
+				mbGfxInvalidated = true;
+			}
+			if (ImGui::MenuItem("Letter / Continuous 11 (8.5 x 11\")", nullptr,
+				mPageOverrideWidthMM == 215.9f && mPageOverrideHeightMM == 279.4f)) {
+				mPageOverrideWidthMM = 215.9f;
+				mPageOverrideHeightMM = 279.4f;
+				mbGfxInvalidated = true;
+			}
+			if (ImGui::MenuItem("Continuous 12 (8.5 x 12\")", nullptr,
+				mPageOverrideWidthMM == 215.9f && mPageOverrideHeightMM == 304.8f)) {
+				mPageOverrideWidthMM = 215.9f;
+				mPageOverrideHeightMM = 304.8f;
+				mbGfxInvalidated = true;
+			}
+			if (ImGui::MenuItem("A4 (210 x 297 mm)", nullptr,
+				mPageOverrideWidthMM == 210.0f && mPageOverrideHeightMM == 297.0f)) {
+				mPageOverrideWidthMM = 210.0f;
+				mPageOverrideHeightMM = 297.0f;
+				mbGfxInvalidated = true;
+			}
+			ImGui::EndMenu();
+		}
+
+		if (ImGui::MenuItem("Ctrl+Scroll to Zoom", nullptr, mbCtrlToZoom)) {
+			mbCtrlToZoom = !mbCtrlToZoom;
+			VDRegistryAppKey key("Settings", true);
+			key.setBool("Printer: Ctrl to zoom", mbCtrlToZoom);
+		}
+
 		ImGui::Separator();
 
 		if (ImGui::MenuItem("Reset View")) {
@@ -919,7 +1006,8 @@ void ATImGuiPrinterOutputPaneImpl::RenderGraphicalOutput() {
 	// Handle zoom (mouse wheel)
 	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows)) {
 		float wheel = ImGui::GetIO().MouseWheel;
-		if (wheel != 0.0f) {
+		const bool doZoom = mbCtrlToZoom == ImGui::GetIO().KeyCtrl;
+		if (wheel != 0.0f && doZoom) {
 			float newZoom = std::clamp(mZoomClicks + wheel, kZoomMin, kZoomMax);
 			if (newZoom != mZoomClicks) {
 				// Zoom centered on mouse cursor position
@@ -943,6 +1031,16 @@ void ATImGuiPrinterOutputPaneImpl::RenderGraphicalOutput() {
 
 				mbGfxInvalidated = true;
 			}
+		}
+		if (wheel != 0.0f && !doZoom) {
+			mViewCenterY -= wheel * mViewMMPerPixel * 16.0f;
+			mbGfxInvalidated = true;
+		}
+
+		float wheelH = ImGui::GetIO().MouseWheelH;
+		if (wheelH != 0.0f && !doZoom) {
+			mViewCenterX += wheelH * mViewMMPerPixel * 16.0f;
+			mbGfxInvalidated = true;
 		}
 	}
 

@@ -23,6 +23,7 @@
 #include <vd2/system/color.h>
 #include <vd2/system/cpuaccel.h>
 #include <vd2/system/file.h>
+#include <vd2/system/registry.h>
 #include <vd2/system/strutil.h>
 #include <vd2/system/vdstl_vectorview.h>
 #include <vd2/system/zip.h>
@@ -148,12 +149,17 @@ public:
 
 	void SetShowPrintHead(bool enable);
 
+	bool IsCtrlToZoomEnabled() const { return mbCtrlToZoom; }
+	void SetCtrlToZoomEnabled(bool enable);
+
 	void Clear();
 
 	void ResetView();
 	void SetPrintPosition(sint32 clientY);
+	void SetPageSizeOverride(float pageWidth, float pageHeight);
+	bool IsPageSizeOverride(float pageWidth, float pageHeight) const;
 	void SaveAsPNG(float dpi);
-	void SaveAsPDF(float pageWidth, float pageHeight);
+	void SaveAsPDF();
 	void SaveAsSVG();
 
 private:
@@ -178,6 +184,7 @@ private:
 	void OnMouseDownL(int x, int y);
 	void OnMouseUpL(int x, int y);
 	void OnMouseWheel(int x, int y, float delta);
+	void OnMouseHWheel(int x, int y, float delta);
 	void OnMouseLeave();
 	void OnCaptureChanged();
 	bool OnGesture(WPARAM wParam, LPARAM lParam);
@@ -216,6 +223,7 @@ private:
 	void RenderTile(const PendingRenderTile& rtile);
 	void RenderTiles(vdspan<const PendingRenderTile> rtiles);
 
+	ATPrinterRasterizer::ViewTransform GetRasterizerViewTransform() const;
 	vdrect32 ClipCanvasRectToPaperArea(const vdrect32& r) const;
 	static vdrect32 CanvasRectToOutsideTileRect(const vdrect32& r);
 	static vdrect32 CanvasRectToInsideTileRect(const vdrect32& r);
@@ -244,6 +252,9 @@ private:
 	vdrect32f GetDocumentBounds() const;
 
 	float mPageWidthMM = 0;
+	float mPageHeightMM = 0;
+	float mPageOverrideWidthMM = 0;		// currently only used for PDF export
+	float mPageOverrideHeightMM = 0;
 	float mPageVBorderMM = 0;
 	float mDotRadiusMM = 0;
 
@@ -273,8 +284,11 @@ private:
 	sint32 mDragLastY = 0;
 	float mDragViewCursorInitialY = 0;
 	float mDragViewCursorCurrentY = 0;
-	float mWheelAccum = 0;
+	float mWheelZoomAccum = 0;
+	float mWheelScrollAccum = 0;
+	float mWheelHScrollAccum = 0;
 
+	bool mbCtrlToZoom = false;
 	bool mbInGesture = false;
 	bool mbFirstGestureEvent = false;
 	vdpoint32 mGestureOrigin {0,0};
@@ -333,6 +347,8 @@ private:
 };
 
 ATUIPrinterGraphicalOutputWindow::ATUIPrinterGraphicalOutputWindow() {
+	VDRegistryAppKey key("Settings", false);
+	mbCtrlToZoom = key.getBool("Printer: Ctrl to zoom", false);
 }
 
 void ATUIPrinterGraphicalOutputWindow::AttachToOutput(ATPrinterGraphicalOutput& output) {
@@ -372,6 +388,7 @@ void ATUIPrinterGraphicalOutputWindow::AttachToOutput(ATPrinterGraphicalOutput& 
 		mViewCursorYOffset = spec.mVerticalDotPitchMM * (float)(spec.mNumPins - 1 - spec.mBaselinePin) + 2.0f * spec.mDotRadiusMM;
 
 	mPageWidthMM = spec.mPageWidthMM;
+	mPageHeightMM = spec.mPageHeightMM;
 	mPageVBorderMM = spec.mPageVBorderMM;
 	mDotRadiusMM = spec.mDotRadiusMM;
 
@@ -388,6 +405,15 @@ void ATUIPrinterGraphicalOutputWindow::SetShowPrintHead(bool enable) {
 	}
 }
 
+void ATUIPrinterGraphicalOutputWindow::SetCtrlToZoomEnabled(bool enable) {
+	if (mbCtrlToZoom != enable) {
+		mbCtrlToZoom = enable;
+
+		VDRegistryAppKey key("Settings", true);
+		key.setBool("Printer: Ctrl to zoom", mbCtrlToZoom);
+	}
+}
+
 void ATUIPrinterGraphicalOutputWindow::Clear() {
 	mViewCenterPixelY = 0;
 
@@ -395,6 +421,8 @@ void ATUIPrinterGraphicalOutputWindow::Clear() {
 
 	if (mpOutput)
 		mpOutput->Clear();
+
+	ForceFullInvalidation();
 }
 
 void ATUIPrinterGraphicalOutputWindow::ResetView() {
@@ -434,6 +462,21 @@ void ATUIPrinterGraphicalOutputWindow::SetPrintPosition(sint32 clientY) {
 	}
 }
 
+void ATUIPrinterGraphicalOutputWindow::SetPageSizeOverride(float pageWidth, float pageHeight) {
+	if (mPageOverrideWidthMM != pageWidth || mPageOverrideHeightMM != pageHeight) {
+		mPageOverrideWidthMM = pageWidth;
+		mPageOverrideHeightMM = pageHeight;
+
+		ForceFullInvalidation();
+	}
+}
+
+bool ATUIPrinterGraphicalOutputWindow::IsPageSizeOverride(float pageWidth,
+	float pageHeight) const {
+	return mPageOverrideWidthMM == pageWidth
+		&& mPageOverrideHeightMM == pageHeight;
+}
+
 void ATUIPrinterGraphicalOutputWindow::SaveAsPNG(float dpi) {
 	const VDStringW& fn = VDGetSaveFileName("PrinterSaveAsPNG"_vdtypeid, (VDGUIHandle)mhwnd, L"Save PNG image", L"PNG image\0*.png\0", L"png");
 	if (fn.empty())
@@ -462,7 +505,7 @@ void ATUIPrinterGraphicalOutputWindow::SaveAsPNG(float dpi) {
 	mRasterizer.TrimBuffers();
 }
 
-void ATUIPrinterGraphicalOutputWindow::SaveAsPDF(float pageWidth, float pageHeight) {
+void ATUIPrinterGraphicalOutputWindow::SaveAsPDF() {
 	if (!mpOutput)
 		return;
 
@@ -470,7 +513,10 @@ void ATUIPrinterGraphicalOutputWindow::SaveAsPDF(float pageWidth, float pageHeig
 	if (fn.empty())
 		return;
 
-	ATPrinterExportAsPDF(fn.c_str(), *mpOutput, pageWidth, pageHeight);
+	ATPrinterExportAsPDF(fn.c_str(), *mpOutput,
+		mPageOverrideWidthMM > 0.0f ? mPageOverrideWidthMM : mPageWidthMM,
+		mPageOverrideHeightMM > 0.0f ? mPageOverrideHeightMM : mPageHeightMM
+	);
 }
 
 void ATUIPrinterGraphicalOutputWindow::SaveAsSVG() {
@@ -522,6 +568,10 @@ LRESULT ATUIPrinterGraphicalOutputWindow::WndProc(UINT msg, WPARAM wParam, LPARA
 
 		case WM_MOUSEWHEEL:
 			OnMouseWheel(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (float)GET_WHEEL_DELTA_WPARAM(wParam) / (float)WHEEL_DELTA);
+			return 0;
+
+		case WM_MOUSEHWHEEL:
+			OnMouseHWheel(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (float)GET_WHEEL_DELTA_WPARAM(wParam) / (float)WHEEL_DELTA);
 			return 0;
 
 		case WM_CAPTURECHANGED:
@@ -836,15 +886,58 @@ void ATUIPrinterGraphicalOutputWindow::OnMouseWheel(int x, int y, float delta) {
 	if (mbDraggingCursor)
 		OnCaptureChanged();
 
-	mWheelAccum += delta;
+	bool doZoom = !mbCtrlToZoom;
+	if (GetKeyState(VK_CONTROL) < 0)
+		doZoom = !doZoom;
 
-	const int clicks = (int)floorf(mWheelAccum + 0.5f);
+	if (doZoom) {
+		mWheelZoomAccum += delta;
+		mWheelScrollAccum = 0;
 
-	if (clicks) {
-		const vdpoint32& cpt = TransformScreenToClient(vdpoint32(x, y));
-		SetZoom(mZoomClicks + (float)clicks, cpt);
+		const int clicks = (int)floorf(mWheelZoomAccum + 0.5f);
 
-		mWheelAccum -= (int)clicks;
+		if (clicks) {
+			mWheelZoomAccum -= (int)clicks;
+
+			const vdpoint32& cpt = TransformScreenToClient(vdpoint32(x, y));
+			SetZoom(mZoomClicks + (float)clicks, cpt);
+		}
+	} else {
+		mWheelZoomAccum = 0;
+
+		int linesPerClick = ATUIGetVerticalScrollLinesPerClick();
+		float pixelsPerClick = linesPerClick < 0 ? (float)mViewHeightPixels : (float)mViewDpi / 6.0f * (float)linesPerClick;
+		// MERGE NOTE: test18 added delta to the accumulator here and again
+		// below, causing every wheel event to scroll too far.
+		float distanceF = pixelsPerClick * delta + mWheelScrollAccum;
+		sint32 distance = VDRoundToInt32(distanceF);
+		mWheelScrollAccum = distanceF - (float)distance;
+
+		ScrollByPixels(0, distance);
+	}
+}
+
+void ATUIPrinterGraphicalOutputWindow::OnMouseHWheel(int x, int y, float delta) {
+	// if there is a pending cursor drag, cancel it
+	if (mbDraggingCursor)
+		OnCaptureChanged();
+
+	bool doZoom = !mbCtrlToZoom;
+	if (GetKeyState(VK_CONTROL) < 0)
+		doZoom = !doZoom;
+
+	if (!doZoom) {
+		mWheelZoomAccum = 0;
+
+		int charsPerClick = ATUIGetHorizontalScrollCharsPerClick();
+		float pixelsPerClick = charsPerClick < 0 ? (float)mViewWidthPixels : (float)mViewDpi / 6.0f * (float)charsPerClick;
+		// MERGE NOTE: test18 added delta to the accumulator here and again
+		// below, causing every wheel event to scroll too far.
+		float distanceF = pixelsPerClick * delta + mWheelHScrollAccum;
+		sint32 distance = VDRoundToInt32(distanceF);
+		mWheelHScrollAccum = distanceF - (float)distance;
+
+		ScrollByPixels(-distance, 0);
 	}
 }
 
@@ -1678,11 +1771,7 @@ void ATUIPrinterGraphicalOutputWindow::ProcessPendingRenders() {
 }
 
 void ATUIPrinterGraphicalOutputWindow::RenderTile(const PendingRenderTile& rtile) {
-	ATPrinterRasterizer::ViewTransform viewTransform;
-	viewTransform.mOriginX = 0;
-	viewTransform.mOriginY = 0;
-	viewTransform.mMMPerPixel = mViewMMPerPixel;
-	viewTransform.mPixelsPerMM = mViewPixelsPerMM;
+	const ATPrinterRasterizer::ViewTransform& viewTransform = GetRasterizerViewTransform();
 
 	CacheTile& ct = AllocateCacheTile(rtile.mTile);
 	const vdrect32& tileDirtyCanvasRect = TileRelativeRectToCanvasRect(ct.mDirtyRect, ct.mTile);
@@ -1730,12 +1819,7 @@ void ATUIPrinterGraphicalOutputWindow::RenderTiles(const vdspan<const PendingRen
 	VDASSERT(rtiles.front().mTile.y == rtiles.back().mTile.y);
 	VDASSERT(rtiles.front().mTile.x + n - 1 == rtiles.back().mTile.x);
 
-	ATPrinterRasterizer::ViewTransform viewTransform;
-	viewTransform.mOriginX = 0;
-	viewTransform.mOriginY = 0;
-	viewTransform.mMMPerPixel = mViewMMPerPixel;
-	viewTransform.mPixelsPerMM = mViewPixelsPerMM;
-
+	const ATPrinterRasterizer::ViewTransform& viewTransform = GetRasterizerViewTransform();
 	const vdrect32& tileDirtyCanvasRect = TileRelativeRectToCanvasRect(vdrect32(0, 0, 128*n, 128), rtiles.front().mTile);
 
 	mTotalPixelsRendered += tileDirtyCanvasRect.width() * tileDirtyCanvasRect.height();
@@ -1775,6 +1859,17 @@ void ATUIPrinterGraphicalOutputWindow::RenderTiles(const vdspan<const PendingRen
 		if (!refreshArea.empty())
 			InvalidateArea(refreshArea);
 	}
+}
+
+ATPrinterRasterizer::ViewTransform ATUIPrinterGraphicalOutputWindow::GetRasterizerViewTransform() const {
+	ATPrinterRasterizer::ViewTransform viewTransform;
+	viewTransform.mOriginX = 0;
+	viewTransform.mOriginY = 0;
+	viewTransform.mMMPerPixel = mViewMMPerPixel;
+	viewTransform.mPixelsPerMM = mViewPixelsPerMM;
+	viewTransform.mPageHeightMM = mPageOverrideHeightMM > 0 ? mPageOverrideHeightMM : mPageHeightMM;
+
+	return viewTransform;
 }
 
 vdrect32 ATUIPrinterGraphicalOutputWindow::ClipCanvasRectToPaperArea(const vdrect32& r) const {
@@ -1934,6 +2029,22 @@ LRESULT ATPrinterOutputWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 							mpTextEditor->SetCursorPixelPos(pt.x, pt.y);
 					}
 
+					if (mpGraphicWindow)
+						VDCheckMenuItemByCommandW32(menu, ID_CONTEXT_CTRLZOOM, mpGraphicWindow->IsCtrlToZoomEnabled());
+
+					if (mpGraphicWindow) {
+						uint32 paperTypeId = ID_PAPERTYPE_AUTO;
+
+						if (mpGraphicWindow->IsPageSizeOverride(215.9f, 279.4f))
+							paperTypeId = ID_PAPERTYPE_LETTER;
+						else if (mpGraphicWindow->IsPageSizeOverride(215.9f, 304.8f))
+							paperTypeId = ID_PAPERTYPE_CONT12;
+						else if (mpGraphicWindow->IsPageSizeOverride(210.0f, 297.0f))
+							paperTypeId = ID_PAPERTYPE_A4;
+
+						VDCheckMenuItemByCommandW32(menu, paperTypeId, true);
+					}
+
 					cmd = TrackPopupMenu(menu, TPM_LEFTALIGN|TPM_TOPALIGN|TPM_RETURNCMD, x, y, 0, mhwnd, NULL);
 
 					DestroyMenu(menu0);
@@ -1953,6 +2064,11 @@ LRESULT ATPrinterOutputWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 								mpGraphicWindow->SetPrintPosition(mpGraphicWindow->TransformScreenToClient(vdpoint32{x, y}).y);
 							break;
 
+						case ID_CONTEXT_CTRLZOOM:
+							if (mpGraphicWindow)
+								mpGraphicWindow->SetCtrlToZoomEnabled(!mpGraphicWindow->IsCtrlToZoomEnabled());
+							break;
+
 						case ID_SAVEAS_PNGIMAGE96:
 							if (mpGraphicWindow)
 								mpGraphicWindow->SaveAsPNG(96.0f);
@@ -1963,24 +2079,29 @@ LRESULT ATPrinterOutputWindow::WndProc(UINT msg, WPARAM wParam, LPARAM lParam) {
 								mpGraphicWindow->SaveAsPNG(300.0f);
 							break;
 
-						case ID_PDFDOCUMENT_AUTO:
+						case ID_SAVEAS_PDF:
 							if (mpGraphicWindow)
-								mpGraphicWindow->SaveAsPDF(0.0f, 0.0f);
+								mpGraphicWindow->SaveAsPDF();
 							break;
 
-						case ID_PDFDOCUMENT_LETTER:
+						case ID_PAPERTYPE_AUTO:
 							if (mpGraphicWindow)
-								mpGraphicWindow->SaveAsPDF(216.0f, 279.4f);
+								mpGraphicWindow->SetPageSizeOverride(0.0f, 0.0f);
 							break;
 
-						case ID_PDFDOCUMENT_A4:
+						case ID_PAPERTYPE_LETTER:
 							if (mpGraphicWindow)
-								mpGraphicWindow->SaveAsPDF(210.0f, 297.0f);
+								mpGraphicWindow->SetPageSizeOverride(215.9f, 279.4f);
 							break;
 
-						case ID_PDFDOCUMENT_CONT12:
+						case ID_PAPERTYPE_A4:
 							if (mpGraphicWindow)
-								mpGraphicWindow->SaveAsPDF(210.0f, 304.8f);
+								mpGraphicWindow->SetPageSizeOverride(210.0f, 297.0f);
+							break;
+
+						case ID_PAPERTYPE_CONT12:
+							if (mpGraphicWindow)
+								mpGraphicWindow->SetPageSizeOverride(215.9f, 304.8f);
 							break;
 
 						case ID_SAVEAS_SVG:

@@ -39,7 +39,7 @@ be removed after equivalent builds are recreated under `build/`.
 
 ## Upstream Baseline
 
-This tree is based on upstream Altirra 4.50 test17 source, with the
+This tree is based on upstream Altirra 4.50 test18 source, with the
 SDL3/CMake frontend and cross-platform adaptations layered on top.
 
 ---
@@ -47,6 +47,31 @@ SDL3/CMake frontend and cross-platform adaptations layered on top.
 ## Quick Start (build.sh)
 
 The `build.sh` script automates the CMake workflow on all platforms.
+
+### Requirements
+
+- CMake 3.24 or newer
+- A C++20 compiler
+- A Make-compatible build tool for the bundled FFmpeg/libx264 build
+- Git (used to fetch bundled dependencies)
+- Linux/macOS desktop builds: `pkg-config` (used to configure the bundled
+  FFmpeg/libx264 MP4 recording support)
+
+On macOS with Homebrew:
+
+```bash
+brew install pkg-config
+```
+
+On Debian or Ubuntu:
+
+```bash
+sudo apt install pkg-config
+```
+
+SDL3, SDL3_image, Dear ImGui, FFmpeg, and libx264 are fetched automatically
+when needed. To build without FFmpeg/libx264 and MP4 recording, pass
+`--cmake "-DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF"`.
 
 ```bash
 # Build release for current platform
@@ -93,7 +118,7 @@ recording by default. On Windows SDL3 builds this path currently
 requires a prebuilt static FFmpeg prefix passed with
 `-DALTIRRA_FFMPEG_ROOT=...`.
 ```
-AltirraSDL-4.50.17-linux.zip
+AltirraSDL-4.50.18-linux.zip
     AltirraSDL          (executable — SDL3 + SDL3_image linked in)
     librashader.so      (optional, with --librashader)
     Copying             (GPL v2+ license)
@@ -382,7 +407,7 @@ To create a distributable folder:
 
 ```bash
 cmake --build build/linux-release --target package_altirra
-# Creates: build/linux-release/AltirraSDL-4.50.17/
+# Creates: build/linux-release/AltirraSDL-4.50.18/
 ```
 
 ### Install Target

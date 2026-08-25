@@ -185,6 +185,7 @@
 #define IDR_PRINTER_1020_PAPERFEED      280
 #define IDR_PRINTER_1020_PENDOWN        281
 #define IDR_PRINTER_1020_PENUP          282
+#define IDR_DBGBREAKPOINTS_ACCEL        283
 #define IDI_DISK                        500
 #define IDI_TAPE                        501
 #define IDI_XEX                         502
@@ -1532,6 +1533,14 @@
 #define ID_PDFDOCUMENT_PDFA4            40825
 #define ID_PDFDOCUMENT_A4               40826
 #define ID_PDFDOCUMENT_CONT12           40827
+#define ID_CONTEXT_CTRL                 40828
+#define ID_CONTEXT_CTRLZOOM             40829
+#define ID_CONTEXT_PAPERTYPE            40830
+#define ID_PAPERTYPE_AUTO               40831
+#define ID_PAPERTYPE_LETTER             40832
+#define ID_PAPERTYPE_A4                 40833
+#define ID_PAPERTYPE_CONTINOUS12        40834
+#define ID_PAPERTYPE_CONT12             40835
 #define ID_INPUT_PORT1_NONE             45000
 #define ID_INPUT_PORT2_NONE             45100
 #define ID_INPUT_PORT3_NONE             45200
@@ -1545,8 +1554,8 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NO_MFC                     1
-#define _APS_NEXT_RESOURCE_VALUE        283
-#define _APS_NEXT_COMMAND_VALUE         40828
+#define _APS_NEXT_RESOURCE_VALUE        284
+#define _APS_NEXT_COMMAND_VALUE         40838
 #define _APS_NEXT_CONTROL_VALUE         1429
 #define _APS_NEXT_SYMED_VALUE           113
 #endif

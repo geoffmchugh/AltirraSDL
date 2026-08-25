@@ -48,6 +48,35 @@ elseif(ALTIRRA_FETCH_FFMPEG)
     endif()
 
     find_program(ALTIRRA_MAKE_PROGRAM NAMES gmake make REQUIRED)
+    find_program(ALTIRRA_PKG_CONFIG_PROGRAM NAMES pkg-config pkgconf)
+
+    set(_ALTIRRA_PKG_CONFIG_RESULT 1)
+    if(ALTIRRA_PKG_CONFIG_PROGRAM)
+        execute_process(
+            COMMAND "${ALTIRRA_PKG_CONFIG_PROGRAM}" --version
+            RESULT_VARIABLE _ALTIRRA_PKG_CONFIG_RESULT
+            OUTPUT_QUIET
+            ERROR_QUIET)
+    endif()
+
+    if(NOT ALTIRRA_PKG_CONFIG_PROGRAM OR
+        NOT _ALTIRRA_PKG_CONFIG_RESULT EQUAL 0)
+        if(APPLE)
+            set(_ALTIRRA_PKG_CONFIG_INSTALL_HINT
+                "Install it with Homebrew: brew install pkg-config")
+        else()
+            string(CONCAT _ALTIRRA_PKG_CONFIG_INSTALL_HINT
+                "Install it with your package manager (for example: "
+                "sudo apt install pkg-config).")
+        endif()
+
+        message(FATAL_ERROR
+            "Building the bundled FFmpeg/libx264 recording support requires pkg-config, "
+            "but a working pkg-config or pkgconf executable was not found.\n"
+            "${_ALTIRRA_PKG_CONFIG_INSTALL_HINT}\n"
+            "Then rerun the build. To build without MP4 recording instead, configure with "
+            "-DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF.")
+    endif()
 
     set(_ALTIRRA_FFMPEG_PREFIX "${CMAKE_BINARY_DIR}/_deps/ffmpeg-prefix")
     set(_ALTIRRA_X264_PREFIX "${CMAKE_BINARY_DIR}/_deps/x264-prefix")
@@ -98,6 +127,7 @@ elseif(ALTIRRA_FETCH_FFMPEG)
 
     set(_ALTIRRA_FFMPEG_CONFIGURE
         --prefix=${_ALTIRRA_FFMPEG_PREFIX}
+        --pkg-config=${ALTIRRA_PKG_CONFIG_PROGRAM}
         --pkg-config-flags=--static
         --extra-cflags=-I${_ALTIRRA_X264_PREFIX}/include
         --extra-ldflags=-L${_ALTIRRA_X264_PREFIX}/lib

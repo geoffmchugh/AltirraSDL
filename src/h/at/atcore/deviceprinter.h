@@ -46,33 +46,37 @@ public:
 
 struct ATPrinterGraphicsSpec {
 	// Page width edge-to-edge, in millimeters.
-	float mPageWidthMM;
+	float mPageWidthMM = 0;
+
+	// Page height edge-to-edge, in millimeters. Zero means unspecified or
+	// no page height (roll paper).
+	float mPageHeightMM = 0;
 
 	// Default vertical border between top of the first page and the top of
 	// the print head. This is typically the same as the left/right borders
 	// and is used to nicely position the paper at start.
-	float mPageVBorderMM;
+	float mPageVBorderMM = 0;
 
 	// Left margin horizontal position during normal printing.
-	float mLeftMarginMM;
+	float mLeftMarginMM = 0;
 
 	// Radius of a printed dot, in millimeters.
-	float mDotRadiusMM;
+	float mDotRadiusMM = 0;
 
 	// Distance from center to center of adjacent dots printed together in
 	// the same column.
-	float mVerticalDotPitchMM;
+	float mVerticalDotPitchMM = 0;
 
 	// True if bit 0 in the pin pattern is the topmost bit in the print head;
 	// false if it is the bottom-most.
-	bool mbBit0Top;
+	bool mbBit0Top = false;
 
 	// Number of pins in the print head.
-	uint32 mNumPins;
+	uint32 mNumPins = 0;
 
 	// Pin number corresponding to the bottom-most dot above the text baseline.
 	// All pins below this pin are for descenders or spacing.
-	uint32 mBaselinePin;
+	uint32 mBaselinePin = 0;
 };
 
 // Interface for output sinks connecting to printer ports and receiving

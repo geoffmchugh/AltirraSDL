@@ -41,6 +41,9 @@ public:
 		float mOriginY = 0;
 		float mPixelsPerMM = 1;
 		float mMMPerPixel = 1;
+
+		// Page height to draw perforation lines at. 0 disables.
+		float mPageHeightMM = 0;
 	};
 
 	ATPrinterRasterizer();
@@ -78,7 +81,11 @@ public:
 private:
 	void SortCullBuffers(float minY, float scanLineHeightY, sint32 numScanLines, float dotRadius, const vdrect32f& fullDotCullRect);
 
-	std::optional<VDPixmap> RenderBlank(uint32 w, uint32 h);
+	std::optional<VDPixmap> RenderBlank(sint32 y, uint32 w, uint32 h, const ViewTransform& viewTransform);
+
+	static bool VerticalRangeCrossesPagePerforation(float y1, float y2, const ViewTransform& viewTransform);
+	void RenderPagePerforation(uint32 *dst, uint32 w);
+
 	void RenderTrapezoid(const sint32 subSpans[2][8], uint32 linearColor, bool rgb);
 	void RenderTrapezoidRGB_Scalar(const sint32 subSpans[2][8], uint32 linearColor);
 

@@ -13,8 +13,24 @@
 bool ATUIConfDevPrinterFX80(VDGUIHandle hParent, ATPropertySet& props) {
 	return ATUIShowDialogGenericConfig(hParent, props, L"Epson FX-80/FX-80+ Printer",
 		[](IATUIConfigView& view) {
-			view.AddCheckbox().SetText(L"SW1-2 Enable &slashed zero").SetTag("slashed_zero").SetLabel(L"DIP switches");
+			view.AddCheckbox().SetText(L"SW1-1 Enable &slashed zero").SetTag("slashed_zero").SetLabel(L"DIP switches");
+			view.AddCheckbox().SetText(L"SW1-2 &Compressed mode default on").SetTag("compressed_on");
+			view.AddCheckbox().SetText(L"SW1-5 E&mphasized mode default on").SetTag("emphasize_on");
+			view.AddCheckbox().SetText(L"SW2-3 &Skip perforation default on").SetTag("skip_on");
 			view.AddCheckbox().SetText(L"SW2-4 Automatic &line feed (LF on CR)").SetTag("auto_lf");
+			view.AddCheckbox().SetText(L"J5 Use 12-inch paper height").SetTag("paper_ht12");
+
+			view.AddIntDropDown()
+				.SetTag("intl_mode")
+				.SetLabel(L"International Mode")
+				.AddChoice(0, L"USA")
+				.AddChoice(1, L"France")
+				.AddChoice(2, L"Germany")
+				.AddChoice(3, L"United Kingdom")
+				.AddChoice(4, L"United Denmark")
+				.AddChoice(5, L"Sweden")
+				.AddChoice(6, L"Italy")
+				.AddChoice(7, L"Spain");
 		}
 	);
 }

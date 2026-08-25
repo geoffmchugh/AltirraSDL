@@ -35,7 +35,9 @@
 #   ./build.sh --help             Show this help
 #
 # On Windows, run from Git Bash, MSYS2, or WSL.
-# Requires: cmake 3.24+, C++20 compiler, git (for fetching SDL3/ImGui).
+# Requires: cmake 3.24+, C++20 compiler, git (for fetching SDL3/ImGui), make,
+# and pkg-config on Linux/macOS (for bundled FFmpeg/libx264 recording).
+# macOS: brew install pkg-config
 # SDL3 is auto-fetched and built from source if no system SDL3 is found,
 # so no manual SDL3 install is required.  If you have SDL3 installed and
 # CMake picks up a broken copy, pass --fetch-sdl3 to force the source build.
