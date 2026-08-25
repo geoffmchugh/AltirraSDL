@@ -161,9 +161,23 @@ void ATWasmOnFileUploaded(const char* vfsPath, int bootNow) {
 EM_JS(void, _altirra_wasm_sync_fs_out, (), {
 	if (typeof Module !== 'undefined' && Module.FS
 			&& typeof Module.FS.syncfs === 'function') {
-		Module.FS.syncfs(false, function (err) {
-			if (err) console.warn('[altirra-wasm] syncfs(out) failed:', err);
-		});
+		if (Module.altirraSyncFSOutActive) {
+			Module.altirraSyncFSOutPending = true;
+			return;
+		}
+
+		var syncOut = function () {
+			Module.altirraSyncFSOutActive = true;
+			Module.altirraSyncFSOutPending = false;
+			Module.FS.syncfs(false, function (err) {
+				Module.altirraSyncFSOutActive = false;
+				if (err)
+					console.warn('[altirra-wasm] syncfs(out) failed:', err);
+				if (Module.altirraSyncFSOutPending)
+					syncOut();
+			});
+		};
+		syncOut();
 	}
 });
 

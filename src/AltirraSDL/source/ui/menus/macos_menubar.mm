@@ -59,6 +59,7 @@
 #include "inputmanager.h"
 #include "inputcontroller.h"
 #include "inputmap.h"
+#include "input_selection.h"
 #include "settings.h"
 #include "options.h"
 #include "firmwaremanager.h"
@@ -136,9 +137,17 @@ typedef void (*MenuBuilderFn)(NSMenu *);
 - (void)menuNeedsUpdate:(NSMenu *)menu {
 	// Remove only the actions belonging to items in this menu —
 	// ClearMenuActions() would wipe the App menu's Quit action (CMD+Q)
-	// since the App menu has no delegate and is never rebuilt.
-	for (NSMenuItem *item in [menu itemArray])
-		g_menuActions.erase(item.tag);
+	// since the App menu has no delegate and is never rebuilt. Descend into
+	// submenus too: their items also have action tags, and otherwise every
+	// menu rebuild leaves their captured C++ state in g_menuActions.
+	std::function<void(NSMenu *)> eraseActions = [&](NSMenu *current) {
+		for (NSMenuItem *item in [current itemArray]) {
+			g_menuActions.erase(item.tag);
+			if (item.submenu)
+				eraseActions(item.submenu);
+		}
+	};
+	eraseActions(menu);
 	[menu removeAllItems];
 	if (self.builder)
 		self.builder(menu);
@@ -1157,7 +1166,10 @@ static void BuildInputMenu(NSMenu *menu) {
 	});
 	AddItem(menu, @"Cycle Quick Maps", false, true, [=]{
 		ATInputManager *im = g_sim.GetInputManager();
-		if (im) im->CycleQuickMaps();
+		if (im) {
+			im->CycleQuickMaps();
+			ATInputSelection::CommitSelections();
+		}
 	});
 
 	AddSeparator(menu);
@@ -1238,35 +1250,33 @@ static void BuildInputMenu(NSMenu *menu) {
 			for (const auto &e : entries)
 				if (e.active) { anyActive = true; break; }
 
-			// Capture entries for the block
-			auto entriesCopy = std::make_shared<std::vector<MapEntry>>(entries);
 			int pi = portIdx;
 
 			AddItem(portMenu, @"None", !anyActive, true, [=]{
 				ATInputManager *im = g_sim.GetInputManager();
 				if (!im) return;
-				uint32 mc = im->GetInputMapCount();
-				for (uint32 j = 0; j < mc; ++j) {
-					vdrefptr<ATInputMap> m;
-					if (im->GetInputMapByIndex(j, ~m) && m->UsesPhysicalPort(pi) && im->IsInputMapEnabled(m))
-						im->ActivateInputMap(m, false);
-				}
+				ATInputSelection::ClearPort(*im, pi);
 			});
 
 			for (size_t ei = 0; ei < entries.size(); ++ei) {
 				const auto &e = entries[ei];
-				VDStringW mapName(e.map->GetName());
+				// Hold the exact map alive until this menu is rebuilt. Looking it
+				// up later by display name is ambiguous because custom maps may
+				// legally have duplicate names.
+				vdrefptr<ATInputMap> mapRef(e.map);
 				AddItem(portMenu,
 					[NSString stringWithUTF8String:e.name.c_str()],
 					e.active, true, [=]{
 					ATInputManager *im = g_sim.GetInputManager();
 					if (!im) return;
-					uint32 mc = im->GetInputMapCount();
-					for (uint32 j = 0; j < mc; ++j) {
-						vdrefptr<ATInputMap> m;
-						if (im->GetInputMapByIndex(j, ~m) && m->UsesPhysicalPort(pi)) {
-							bool shouldActivate = (wcscmp(m->GetName(), mapName.c_str()) == 0);
-							im->ActivateInputMap(m, shouldActivate);
+					const uint32 count = im->GetInputMapCount();
+					for (uint32 i = 0; i < count; ++i) {
+						vdrefptr<ATInputMap> map;
+						if (im->GetInputMapByIndex(i, ~map) && map
+							&& map.get() == mapRef.get())
+						{
+							ATInputSelection::Toggle(*im, mapRef);
+							break;
 						}
 					}
 				});

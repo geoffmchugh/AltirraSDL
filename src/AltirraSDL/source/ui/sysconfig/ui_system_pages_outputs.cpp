@@ -23,7 +23,6 @@
 #include "cassette.h"
 #include "options.h"
 #include "uiaccessors.h"
-#include "adaptive_input.h"
 #include <at/atcore/media.h>
 #include <at/atcore/device.h>
 #include <at/atcore/deviceparent.h>
@@ -480,25 +479,11 @@ void RenderDisplayCategory(ATSimulator &) {
 void RenderInputCategory(ATSimulator &sim) {
 	ATPokeyEmulator& pokey = sim.GetPokey();
 
-	// Adaptive Input — universal "everything just works" toggle.  When
-	// on (default), all canonical port-1 input maps for the current
-	// hardware are activated together: keyboard arrows, numpad, any
-	// connected gamepad, and the on-screen touch joypad.  Inputs from
-	// these sources compose additively in ATInputManager (multiple
-	// active maps each contribute their bindings to the same port).
-	// Power users who want exclusive single-map control turn this off
-	// and pick maps manually via the Input Mappings list.
-	bool adaptive = ATAdaptiveInput::IsEnabled();
-	if (ImGui::Checkbox("Adaptive input (use keyboard, gamepad, and on-screen joypad together for port 1)", &adaptive))
-		ATAdaptiveInput::SetEnabled(adaptive);
-	ImGui::SetItemTooltip(
-		"When on, all sensible port-1 input mappings are active at the "
-		"same time — keyboard arrows, numpad, gamepad, and the touch "
-		"joypad in Gaming Mode all drive the joystick simultaneously.\n\n"
-		"Recommended for most users.  Turn off if you want to lock port "
-		"1 to a single specific input source (set up via the Input "
-		"Mappings list).  This setting only adds extra mappings; it "
-		"never deactivates one you turned on yourself.");
+	ImGui::TextWrapped(
+		"Input maps can be enabled together. Manage each controller port "
+		"from Input > Port 1 through Port 4, or edit maps under Input > "
+		"Input Mappings. Your checked maps are retained across modes and "
+		"restarts.");
 	ImGui::Separator();
 	ImGui::Spacing();
 

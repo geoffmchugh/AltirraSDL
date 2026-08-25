@@ -66,7 +66,7 @@ extern "C" bool ATWasmBrokerIsActive();
 #include "display_backend_sdl.h"
 #include "gl_funcs.h"
 #include "input_sdl3.h"
-#include "adaptive_input.h"
+#include "input_selection.h"
 #include "touch_controls.h"
 #include "touch_widgets.h"
 #include "ui_mobile.h"
@@ -2228,177 +2228,12 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	// Adaptive Input — universal one-toggle "let keyboard, gamepad,
-	// and on-screen joypad all drive port 1 simultaneously".  Default-
-	// on for first-run users; existing users with saved input-map
-	// selections are unaffected because Adaptive is purely additive
-	// (it activates extra canonical maps; never deactivates user
-	// selections).  Replaces the previous Android-only "force-pick the
-	// best gamepad map" block — the Android UX is preserved (gamepad
-	// + touch joypad both work) AND keyboard arrows now work for free,
-	// AND the same default works on Linux Desktop, Windows Gaming
-	// Mode, and the WASM browser build (where there is no setup
-	// wizard for deep-link Join arrivals).  Users who want exclusive
-	// single-map control turn the checkbox off in Configure System →
-	// Input.  See input/adaptive_input.h for the design rationale.
-	{
-		ATAdaptiveInput::Load();
-		ATAdaptiveInput::Apply();
-	}
-#ifdef __ANDROID__
-	// Legacy single-map activation block — kept for now as a safety
-	// net so existing Android installs continue to behave identically
-	// during the Adaptive rollout.  Adaptive's additive Apply() runs
-	// first; any further activation here is harmless overlap.
-	//
-	// Background: on Windows / desktop, the user picks an input map
-	// via the "Input" menu, and that activation is written to the
-	// registry so next time LoadSelections() in inputmanager.cpp
-	// re-activates it.  On a fresh mobile install there's no saved
-	// selection *and* `defaultControllerType == kATInputControllerType_None`
-	// on non-5200 hardware (settings.cpp:726) — so LoadSelections
-	// skips its "pick first matching map" fallback and leaves the
-	// input manager with every preset map loaded but none active.
-	//
-	// Even after we force-activate ANY joystick map, there are three
-	// default joystick maps:
-	//   "Gamepad -> Joystick (port 1)"   mUnit=-1 (any)  port=0
-	//   "Gamepad 1 -> Joystick (port 1)" mUnit= 0         port=0
-	//   "Gamepad 2 -> Joystick (port 2)" mUnit= 1         port=1
-	// mInputMaps is a `std::map<ATInputMap*, bool>`, so iteration order
-	// is by pointer address (nondeterministic).  If we happened to
-	// pick the "port 2" map, touch inputs would route to the wrong
-	// Atari port and nothing would happen in-game.
-	//
-	// Fix: look for a map that (a) matches the current hardware's
-	// controller type, (b) uses Atari physical port 0, and
-	// (c) prefers mUnit=-1 (works for any input source) over a
-	// specific unit index.  Activate that one explicitly, and log
-	// the name so future debugging is trivial.
-	{
-		ATInputManager *im = g_sim.GetInputManager();
-
-		// First deactivate every currently-active map so we don't
-		// end up with the wrong one lingering (e.g. if a previous
-		// session saved "Gamepad 2" as active).
-		const uint32 count = im->GetInputMapCount();
-		for (uint32 i = 0; i < count; ++i) {
-			vdrefptr<ATInputMap> imap;
-			if (im->GetInputMapByIndex(i, ~imap) && imap)
-				im->ActivateInputMap(imap, false);
-		}
-
-		ATInputControllerType wanted =
-			(g_sim.GetHardwareMode() == kATHardwareMode_5200)
-				? kATInputControllerType_5200Controller
-				: kATInputControllerType_Joystick;
-
-		ATInputMap *chosen = nullptr;
-		int chosenScore = -1;
-
-		// Codes that ATTouchControls_HandleEvent actually emits.  The
-		// chosen input map MUST contain mappings for these, otherwise
-		// touch input gets swallowed by the input manager with no
-		// effect (e.g. the "Numpad -> Joystick (port 1)" preset also
-		// targets port 0 but binds kATInputCode_KeyNumpad* — useless
-		// for touch).
-		// ---------------------------------------------------------------
-		// Virtual joystick / fire wiring — how it works, in one place
-		// ---------------------------------------------------------------
-		// touch_controls.cpp converts finger events into five "source"
-		// input codes it feeds directly into the input manager via
-		// OnButtonDown/OnButtonUp with unit=0:
-		//
-		//   kATInputCode_JoyStick1Left  (0x2100)
-		//   kATInputCode_JoyStick1Right (0x2101)
-		//   kATInputCode_JoyStick1Up    (0x2102)
-		//   kATInputCode_JoyStick1Down  (0x2103)
-		//   kATInputCode_JoyButton0     (0x2800)
-		//
-		// For these to actually move the player / fire, ONE input map
-		// must be active that:
-		//   1. Has a Joystick controller attached to Atari physical
-		//      port 0 (HasControllerType(Joystick) && UsesPhysicalPort(0)).
-		//   2. SpecificInputUnit == -1 (accept any source unit — our
-		//      touch controller is not a registered input unit).
-		//   3. Contains direct 1:1 mappings from the five source codes
-		//      above to the joystick triggers Left/Right/Up/Down/Button0.
-		//
-		// Several built-in presets look plausible but silently fail:
-		//   "Numpad -> Joystick (port 1)"           — sources are
-		//       kATInputCode_KeyNumpad*, not JoyStick1*.
-		//   "Gamepad -> Joystick (port 1)"          — has all 5 direct
-		//       sources but also has fall-through analog-axis sources,
-		//       and std::map<ATInputMap*, bool> iteration order is by
-		//       pointer address, so this one sometimes won the tiebreak
-		//       over the properly-authored "Xbox 360 Controller" map.
-		//   "Gamepad N -> Joystick (port 1)"        — unit != -1.
-		//
-		// countTouchBindings() below counts distinct direct 1:1 source
-		// codes.  The selector requires all 5 to be present and picks
-		// the best candidate by (unit-agnostic bonus + match count),
-		// which reliably resolves to "Xbox 360 Controller -> Joystick
-		// (port 1)" on a default install.
-		//
-		// The activation MUST happen after default maps are loaded
-		// (settings.cpp runs LoadSelections) but BEFORE the main loop
-		// starts polling input.  ColdReset does NOT detach controllers
-		// from the port manager, so the activation is stable across
-		// subsequent sim resets.
-		auto countTouchBindings = [](ATInputMap *imap) -> int {
-			bool hasL=false,hasR=false,hasU=false,hasD=false,hasFire=false;
-			const uint32 m = imap->GetMappingCount();
-			for (uint32 i = 0; i < m; ++i) {
-				const auto &mapping = imap->GetMapping(i);
-				uint32 code = mapping.mInputCode & kATInputCode_IdMask;
-				if (code == kATInputCode_JoyStick1Left)  hasL = true;
-				if (code == kATInputCode_JoyStick1Right) hasR = true;
-				if (code == kATInputCode_JoyStick1Up)    hasU = true;
-				if (code == kATInputCode_JoyStick1Down)  hasD = true;
-				if (code == (uint32)kATInputCode_JoyButton0) hasFire = true;
-			}
-			return (hasL?1:0) + (hasR?1:0) + (hasU?1:0) + (hasD?1:0) + (hasFire?1:0);
-		};
-
-		for (uint32 i = 0; i < count; ++i) {
-			vdrefptr<ATInputMap> imap;
-			if (!im->GetInputMapByIndex(i, ~imap) || !imap)
-				continue;
-			if (!imap->HasControllerType(wanted))
-				continue;
-			// Must target Atari physical port 0 (= joystick port 1).
-			if (!imap->UsesPhysicalPort(0))
-				continue;
-			int touchMatches = countTouchBindings(imap);
-			// Must have ALL 5 direct touch source codes (4 dirs + fire),
-			// otherwise some directions/fire will silently be dead.
-			if (touchMatches < 5)
-				continue;
-			// Prefer generic (unit=-1) over a specific unit index,
-			// because our touch controller isn't registered as a
-			// specific input unit.  Break further ties by number of
-			// direct matches (already clamped to 5).
-			int score = (imap->GetSpecificInputUnit() == -1) ? 100 : 50;
-			score += touchMatches;
-			if (score > chosenScore) {
-				chosenScore = score;
-				chosen = imap;
-			}
-		}
-
-		if (chosen) {
-			im->ActivateInputMap(chosen, true);
-			VDStringA nameU8 = VDTextWToU8(VDStringW(chosen->GetName()));
-			SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-				"Altirra: activated mobile input map '%s' (unit=%d)",
-				nameU8.c_str(), chosen->GetSpecificInputUnit());
-		} else {
-			SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-				"Altirra: no port-0 joystick input map matches current "
-				"hardware — touch controls will not route to the emulator");
-		}
-	}
-#endif
+	// First-run-only multi-source default.  Once a profile has an active-map
+	// value (including an explicitly empty one for "None"), it is the sole
+	// authority and is never changed by startup, UI-mode, or lobby code.
+	if (ATInputManager *im = g_sim.GetInputManager())
+		ATInputSelection::NormalizeMapNames(*im);
+	ATInputSelection::SeedDefaultsIfNoSelection();
 
 	// Register the options update callback for accelerated screen FX.
 	// This mirrors Windows main.cpp — mbDisplayAccelScreenFX defaults to
@@ -2618,18 +2453,26 @@ int main(int argc, char *argv[]) {
 			Wiz_ApplyHardwareAddons(g_sim, addonsOn, /*deferReset=*/true);
 
 #  if defined(__ANDROID__)
-			// Android Gaming Mode default: real read/write disk mounts.
-			// Phones don't expose a file dialog the way Desktop does, so
-			// the discoverable workflow for "this game saves high scores
-			// / progress" is to make persistence the default and let the
-			// user dial it back via Configure System > Disk drives if a
-			// disk image is precious.  The disk write mode is read from
-			// g_ATOptions.mDefaultWriteMode at mount time; flushing via
-			// ATOptionsSave persists the choice so a returning user keeps
-			// it (or sees their own later override stick).
+			// Android Gaming Mode default: persistent disk saves. Users
+			// can change it in Disk Drives > Saving Type, or in Desktop
+			// Mode through Configure System > Media > Defaults. The disk
+			// write mode is read from g_ATOptions.mDefaultWriteMode at
+			// mount time.
 			g_ATOptions.mDefaultWriteMode = kATMediaWriteMode_RW;
 			g_ATOptions.mbDirty = true;
 			ATOptionsSave();
+
+			// ATOptionsSave updates the registry provider only. Flush now
+			// because Android may terminate a first-run app before a normal
+			// suspend or clean exit.
+			try {
+				extern void ATRegistryFlushToDisk();
+				ATRegistryFlushToDisk();
+			} catch (...) {
+				SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					"Altirra: registry flush failed while saving Android "
+					"disk defaults");
+			}
 #  endif
 
 			// Mark the mobile FirstRunWizard "done" too — without this,

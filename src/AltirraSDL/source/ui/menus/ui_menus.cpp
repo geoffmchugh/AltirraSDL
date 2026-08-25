@@ -47,6 +47,7 @@
 #include "inputmanager.h"
 #include "inputcontroller.h"
 #include "inputmap.h"
+#include "input_selection.h"
 #include "settings.h"
 #include "options.h"
 #include "firmwaremanager.h"
@@ -799,8 +800,8 @@ static void RenderFileMenu(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 // =========================================================================
 
 // Render a single Port submenu.  Queries ATInputManager for all input maps
-// that touch the given physical port, presents them as radio items, and
-// toggles activation.  Mirrors Windows uiportmenus.cpp behavior exactly.
+// that touch the given physical port, presents them as independent checked
+// items, and persists each selection immediately.
 static void RenderPortSubmenu(ATInputManager &im, int portIdx) {
 	// Collect input maps that use this physical port
 	struct MapEntry {
@@ -835,21 +836,17 @@ static void RenderPortSubmenu(ATInputManager &im, int portIdx) {
 	for (const auto &e : entries)
 		if (e.active) { anyActive = true; break; }
 
-	if (ImGui::MenuItem("None", nullptr, !anyActive)) {
-		// Deactivate all maps for this port
-		for (const auto &e : entries)
-			if (e.active)
-				im.ActivateInputMap(e.map, false);
-	}
+	if (ImGui::RadioButton("None", !anyActive))
+		ATInputSelection::ClearPort(im, portIdx);
 
-	// One radio item per input map — strict radio behavior matching Windows:
-	// clicking any item activates it and deactivates all others for this port.
-	// Clicking the already-active item is a no-op (it stays selected).
+	// Each source is independently selectable.  Keep the parent menu open so
+	// a player can choose Arrow Keys, Numpad, and a gamepad in one visit.
 	for (const auto &e : entries) {
-		if (ImGui::MenuItem(e.name.c_str(), nullptr, e.active)) {
-			for (const auto &other : entries)
-				im.ActivateInputMap(other.map, &other == &e);
-		}
+		bool enabled = e.active;
+		ImGui::PushID(e.map);
+		if (ImGui::Checkbox(e.name.c_str(), &enabled))
+			ATInputSelection::Toggle(im, e.map);
+		ImGui::PopID();
 	}
 }
 
@@ -865,6 +862,7 @@ static void RenderInputMenu(ATSimulator &sim, ATUIState &state) {
 	if (ImGui::MenuItem("Cycle Quick Maps", ATUIGetShortcutStringForCommand("Input.CycleQuickMaps"))) {
 		if (pIM) {
 			ATInputMap *pMap = pIM->CycleQuickMaps();
+			ATInputSelection::CommitSelections();
 			if (pMap) {
 				VDStringA msg;
 				msg = "Quick map: ";

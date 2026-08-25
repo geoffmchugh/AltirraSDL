@@ -23,6 +23,7 @@
 #include "simulator.h"
 #include "inputmanager.h"
 #include "inputmap.h"
+#include "input_selection.h"
 #include "inputdefs.h"
 #include "joystick.h"
 
@@ -1092,7 +1093,7 @@ static vdrefptr<ATInputMap> CreateInputMapFromTemplate(
 	VDStringA nameA;
 	nameA.sprintf("%s -> %s (%sport %u)", srcShort, ctShort, modeStr, portIdx + 1);
 	name = VDTextU8ToW(nameA);
-	imap->SetName(name.c_str());
+	ATInputSelection::AssignUniqueName(*pIM, *imap, name.c_str());
 
 	uint32 controllerIdx = (uint32)portIdx;
 	if (ctinfo.mType == kATInputControllerType_Paddle)
@@ -2234,8 +2235,10 @@ static void RenderCreateInputMapPopup(ATInputManager *pIM) {
 	if (ImGui::Button("OK", ImVec2(80, 0))) {
 		vdrefptr<ATInputMap> newMap = CreateInputMapFromTemplate(
 			pIM, g_createCtrlType, g_createPort, g_createSource, g_createAnalogMode > 0);
-		if (newMap)
+		if (newMap) {
 			pIM->ActivateInputMap(newMap, true);
+			ATInputSelection::CommitMapsAndSelections();
+		}
 		g_showCreateInputMap = false;
 	}
 	ImGui::SameLine();
@@ -2249,20 +2252,41 @@ static void RenderCreateInputMapPopup(ATInputManager *pIM) {
 // Input Mappings list dialog
 // =========================================================================
 
+static void CloseInputMappings(ATSimulator &sim) {
+	const bool wasOpen = g_inputMappingsWasOpen;
+	ATInputManager *pIM = sim.GetInputManager();
+
+	// The edit dialog temporarily disables its map.  Restore that state
+	// before serialising, regardless of whether the parent was closed with
+	// OK, Escape, or its title-bar close button.
+	if (g_editMap) {
+		if (pIM)
+			pIM->ActivateInputMap(g_editMap, g_editMapWasEnabled);
+		g_editMap = nullptr;
+	}
+
+	// Mapping/rebind dialogs acquire joystick capture.  The child renderers
+	// no longer run after their parent closes, so release it explicitly here.
+	if (g_editMappingWasOpen || g_rebindCaptureActive) {
+		if (IATJoystickManager *pJoyMan = sim.GetJoystickManager())
+			pJoyMan->SetCaptureMode(false);
+	}
+	g_editMappingWasOpen = false;
+	g_rebindCaptureActive = false;
+	g_showEditInputMap = false;
+	g_showEditController = false;
+	g_showEditMapping = false;
+	g_showRebind = false;
+	g_showCreateInputMap = false;
+
+	g_inputMappingsWasOpen = false;
+	if (wasOpen)
+		ATInputSelection::CommitMapsAndSelections();
+}
+
 void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 	if (!state.showInputMappings) {
-		// Clean up if dialog was closed while edit sub-dialog was open
-		if (g_editMap) {
-			ATInputManager *pIM = sim.GetInputManager();
-			pIM->ActivateInputMap(g_editMap, g_editMapWasEnabled);
-			g_editMap = nullptr;
-			g_showEditInputMap = false;
-			g_showEditController = false;
-			g_showEditMapping = false;
-			g_showRebind = false;
-			g_showCreateInputMap = false;
-		}
-		g_inputMappingsWasOpen = false;
+		CloseInputMappings(sim);
 		return;
 	}
 
@@ -2279,13 +2303,13 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
 		ImGui::End();
 		if (!state.showInputMappings)
-			g_inputMappingsWasOpen = false;
+			CloseInputMappings(sim);
 		return;
 	}
 
 	if (ATUICheckEscClose()) {
 		state.showInputMappings = false;
-		g_inputMappingsWasOpen = false;
+		CloseInputMappings(sim);
 		ImGui::End();
 		return;
 	}
@@ -2326,8 +2350,10 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			// Column 0: Enable checkbox
 			ImGui::TableNextColumn();
 			bool enabled = pIM->IsInputMapEnabled(imap);
-			if (ImGui::Checkbox("##en", &enabled))
+			if (ImGui::Checkbox("##en", &enabled)) {
 				pIM->ActivateInputMap(imap, enabled);
+				ATInputSelection::CommitSelections();
+			}
 
 			// Column 1: Name (editable on double-click)
 			ImGui::TableNextColumn();
@@ -2335,12 +2361,16 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 				ImGui::SetNextItemWidth(-1);
 				if (ImGui::InputText("##name", g_editNameBuf, sizeof(g_editNameBuf),
 						ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-					imap->SetName(VDTextU8ToW(g_editNameBuf, -1).c_str());
+					ATInputSelection::AssignUniqueName(*pIM, *imap,
+						VDTextU8ToW(g_editNameBuf, -1).c_str());
 					g_editingMapIndex = -1;
+					ATInputSelection::CommitMapsAndSelections();
 				}
 				if (!ImGui::IsItemActive() && !ImGui::IsItemFocused() && g_editingMapIndex == (int)i) {
-					imap->SetName(VDTextU8ToW(g_editNameBuf, -1).c_str());
+					ATInputSelection::AssignUniqueName(*pIM, *imap,
+						VDTextU8ToW(g_editNameBuf, -1).c_str());
 					g_editingMapIndex = -1;
+					ATInputSelection::CommitMapsAndSelections();
 				}
 			} else {
 				VDStringA nameU8 = VDTextWToU8(VDStringW(imap->GetName()));
@@ -2390,8 +2420,10 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			// Column 3: Quick map checkbox
 			ImGui::TableNextColumn();
 			bool quick = imap->IsQuickMap();
-			if (ImGui::Checkbox("##qm", &quick))
+			if (ImGui::Checkbox("##qm", &quick)) {
 				imap->SetQuickMap(quick);
+				ATInputSelection::CommitMapsAndSelections();
+			}
 
 			ImGui::PopID();
 		}
@@ -2403,6 +2435,7 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 	if (!g_showEditInputMap && g_editMap) {
 		pIM->ActivateInputMap(g_editMap, g_editMapWasEnabled);
 		g_editMap = nullptr;
+		ATInputSelection::CommitMapsAndSelections();
 	}
 
 	// Action buttons
@@ -2412,9 +2445,10 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 		vdrefptr<ATInputMap> newMap(new ATInputMap);
 		VDStringW name;
 		name.sprintf(L"Input map %d", pIM->GetInputMapCount() + 1);
-		newMap->SetName(name.c_str());
+		ATInputSelection::AssignUniqueName(*pIM, *newMap, name.c_str());
 		pIM->AddInputMap(newMap);
 		pIM->ActivateInputMap(newMap, true);
+		ATInputSelection::CommitMapsAndSelections();
 	}
 	ImGui::SameLine();
 
@@ -2424,7 +2458,8 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			vdrefptr<ATInputMap> cloned(new ATInputMap);
 			VDStringW cloneName(srcMap->GetName());
 			cloneName += L" (copy)";
-			cloned->SetName(cloneName.c_str());
+			ATInputSelection::AssignUniqueName(*pIM, *cloned,
+				cloneName.c_str());
 
 			for (uint32 c = 0; c < srcMap->GetControllerCount(); ++c) {
 				const auto& ctrl = srcMap->GetController(c);
@@ -2439,6 +2474,7 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 
 			pIM->AddInputMap(cloned);
 			pIM->ActivateInputMap(cloned, true);
+			ATInputSelection::CommitMapsAndSelections();
 		}
 	}
 	ImGui::SameLine();
@@ -2465,6 +2501,7 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			pIM->RemoveInputMap(delMap);
 			if (g_selectedMapIndex >= (int)pIM->GetInputMapCount())
 				g_selectedMapIndex = (int)pIM->GetInputMapCount() - 1;
+			ATInputSelection::CommitMapsAndSelections();
 		}
 	}
 	ImGui::SameLine();
@@ -2480,8 +2517,11 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			if (pIM->GetPresetInputMapByIndex(i, ~preset)) {
 				VDStringA name = VDTextWToU8(VDStringW(preset->GetName()));
 				if (ImGui::MenuItem(name.c_str())) {
+					ATInputSelection::AssignUniqueName(*pIM, *preset,
+						preset->GetName());
 					pIM->AddInputMap(preset);
 					pIM->ActivateInputMap(preset, true);
+					ATInputSelection::CommitMapsAndSelections();
 				}
 			}
 		}
@@ -2522,6 +2562,7 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 			g_editingMapIndex = -1;
 			g_selectedMapIndex = -1;
 			pIM->ResetToDefaults();
+			ATInputSelection::CommitMapsAndSelections();
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SameLine();
@@ -2536,16 +2577,12 @@ void ATUIRenderInputMappings(ATSimulator &sim, ATUIState &state) {
 	ImGui::SetCursorPosX(ImGui::GetWindowWidth() - buttonWidth - ImGui::GetStyle().WindowPadding.x);
 	if (ImGui::Button("OK", ImVec2(buttonWidth, 0))) {
 		state.showInputMappings = false;
-		g_inputMappingsWasOpen = false;
-		// Save input maps to registry
-		VDRegistryAppKey key("InputMaps", true);
-		pIM->SaveMaps(key);
-		pIM->SaveSelections(key);
+		CloseInputMappings(sim);
 	}
 
 	// Track dialog close via X button
 	if (!state.showInputMappings)
-		g_inputMappingsWasOpen = false;
+		CloseInputMappings(sim);
 
 	ImGui::End();
 

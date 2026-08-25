@@ -31,6 +31,7 @@
 #include <at/atio/diskimage.h>
 #include "mediamanager.h"
 #include "firmwaremanager.h"
+#include "options.h"
 #include "uiaccessors.h"
 #include "uitypes.h"
 #include "constants.h"
@@ -40,6 +41,9 @@
 
 #include "mobile_internal.h"
 #include "altirra_icons.h"
+#ifdef ALTIRRA_NETPLAY_ENABLED
+#include "netplay/netplay_glue.h"
+#endif
 
 extern ATSimulator g_sim;
 extern VDStringA ATGetConfigDir();
@@ -49,6 +53,147 @@ extern IDisplayBackend *ATUIGetDisplayBackend();
 static const char *BasenameU8(const char *path) {
 	const char *p = strrchr(path, '/');
 	return p ? p + 1 : path;
+}
+
+// Gaming Mode deliberately exposes one saving choice for the entire disk
+// subsystem.  Desktop Mode retains its per-drive selector for specialist
+// multi-disk setups; a gamepad/touch user should not have to discover which
+// drive contains a game's save disk before enabling persistence.
+static const ATMediaWriteMode kMobileWriteModeValues[] = {
+	kATMediaWriteMode_RO,
+	kATMediaWriteMode_VRWSafe,
+	kATMediaWriteMode_VRW,
+	kATMediaWriteMode_RW,
+};
+
+static const char *const kMobileWriteModeLabels[] = {
+	"Read-only", "Temporary", "Format", "Persistent",
+};
+
+static int GetMobileWriteModeIndex(ATMediaWriteMode mode) {
+	for (int i = 0; i < (int)(sizeof(kMobileWriteModeValues)
+		/ sizeof(kMobileWriteModeValues[0])); ++i) {
+		if (kMobileWriteModeValues[i] == mode)
+			return i;
+	}
+
+	return 1; // Preserve Altirra's Virtual R/W (Safe) fallback.
+}
+
+// Move a currently mounted virtual disk into its protected persistent slot
+// before enabling R/W.  Setting the AutoFlush bit on the existing source
+// mount would otherwise flush the game's changes directly to the user's
+// original image.  SaveDiskAs also preserves any save data accumulated in
+// the current virtual session.
+static bool MoveMountedDiskToPersistentCopy(ATDiskInterface& diskIf,
+	VDStringA& error)
+{
+	if (!diskIf.IsDiskLoaded())
+		return true;
+
+	const wchar_t *path = diskIf.GetPath();
+	IATDiskImage *image = diskIf.GetDiskImage();
+	if (!path || !*path || !image || image->IsDynamic()) {
+		error = "This disk cannot be saved as a persistent image.";
+		return false;
+	}
+
+	VDStringW persistentPath = ATResolveDiskMount(path,
+		kATMediaWriteMode_RW);
+	if (persistentPath.empty()) {
+		error = "Altirra could not create a persistent copy for this disk.";
+		return false;
+	}
+
+	if (wcscmp(persistentPath.c_str(), path) == 0) {
+		// A path already inside disk_state is the protected working copy.
+		// Any other unchanged path means that the resolver could not safely
+		// redirect this source (for example, a dynamic or unsupported image).
+		VDStringW canonicalPath = ATResolveDiskCanonical(path);
+		if (wcscmp(canonicalPath.c_str(), path) == 0) {
+			error = "Altirra could not create a protected persistent copy for this disk.";
+			return false;
+		}
+		return true;
+	}
+
+	ATDiskImageFormat format = image->GetImageFormat();
+	if (format == kATDiskImageFormat_None) {
+		error = "This disk image format cannot be saved persistently.";
+		return false;
+	}
+
+	try {
+		diskIf.SaveDiskAs(persistentPath.c_str(), format);
+	} catch (const MyError& e) {
+		error.sprintf("Altirra could not save this disk's current data: %s",
+			e.c_str());
+		return false;
+	}
+
+	return true;
+}
+
+static void SetMobileGlobalWriteMode(ATSimulator& sim,
+	ATMediaWriteMode writeMode)
+{
+#ifdef ALTIRRA_NETPLAY_ENABLED
+	// The netplay boot path hardcodes VRWSafe and canonical image bytes.
+	// Changing live drive modes during Handshaking or Lockstepping would
+	// change drive status responses on only this peer and desync it.
+	if (ATNetplayGlue::IsSessionEngaged())
+		return;
+#endif
+
+	extern ATOptions g_ATOptions;
+	ATOptions previous(g_ATOptions);
+	g_ATOptions.mDefaultWriteMode = writeMode;
+	if (g_ATOptions != previous) {
+		g_ATOptions.mbDirty = true;
+		ATOptionsRunUpdateCallbacks(&previous);
+		ATOptionsSave();
+		try {
+			ATRegistryFlushToDisk();
+		} catch (...) {
+			// The normal suspend/exit path retries persistence.
+		}
+	}
+
+	int failedDrive = -1;
+	VDStringA error;
+	for (int i = 0; i < 15; ++i) {
+		ATDiskInterface& diskIf = sim.GetDiskInterface(i);
+		const ATMediaWriteMode previousWriteMode = diskIf.GetWriteMode();
+
+		// R/W mounts must use the disk-state working copy.  Do the move
+		// before flipping the mode, so failures leave an inserted disk in
+		// its prior safe mode instead of making it write to its source.
+		if (writeMode == kATMediaWriteMode_RW
+			&& !MoveMountedDiskToPersistentCopy(diskIf, error)) {
+			if (failedDrive < 0)
+				failedDrive = i;
+			continue;
+		}
+
+		// SetWriteMode stops a pending auto-flush timer when moving away
+		// from Persistent.  Flush first so a just-written in-game save is
+		// not silently discarded during the saving-type change.
+		if ((previousWriteMode & kATMediaWriteMode_AutoFlush)
+			&& !(writeMode & kATMediaWriteMode_AutoFlush)) {
+			diskIf.Flush();
+		}
+
+		diskIf.SetWriteMode(writeMode);
+	}
+
+	if (failedDrive >= 0) {
+		VDStringA message;
+		message.sprintf(
+			"D%d kept its previous saving type.\n\n%s\n\n"
+			"Newly mounted disks will use Persistent.",
+			failedDrive + 1, error.c_str());
+		ShowInfoModal("Persistent saving unavailable", message.c_str());
+	}
 }
 
 void RenderMobileDiskRow(ATSimulator &sim, int driveIdx,
@@ -206,6 +351,16 @@ void RenderMobileDiskRow(ATSimulator &sim, int driveIdx,
 void RenderMobileDiskManager(ATSimulator &sim, ATUIState &uiState,
 	ATMobileUIState &mobileState, SDL_Window *window)
 {
+#ifdef ALTIRRA_NETPLAY_ENABLED
+	// Match the Desktop Disk Drives dialog: disk mounting and configuration
+	// are local-only mutations, so they must not remain reachable after a
+	// peer has engaged in a lockstep session.
+	if (ATNetplayGlue::IsSessionEngaged()) {
+		mobileState.currentScreen = ATMobileUIScreen::HamburgerMenu;
+		return;
+	}
+#endif
+
 	ImGuiIO &io = ImGui::GetIO();
 
 	// Full-screen background — palette-aware so light theme doesn't
@@ -288,6 +443,53 @@ void RenderMobileDiskManager(ATSimulator &sim, ATUIState &uiState,
 		{
 			s_mobileShowAllDrives = !s_mobileShowAllDrives;
 		}
+
+		// One saving type governs every disk drive in Gaming Mode.  The
+		// choice is persisted as the normal Altirra media default and is
+		// also applied immediately to all 15 drive interfaces.
+		ImGui::Spacing();
+		ATTouchSection("Saving Type");
+		extern ATOptions g_ATOptions;
+		int writeModeIdx = GetMobileWriteModeIndex(
+			g_ATOptions.mDefaultWriteMode);
+		if (ATTouchSegmented("All disk drives", &writeModeIdx,
+			kMobileWriteModeLabels,
+			(int)(sizeof(kMobileWriteModeLabels)
+				/ sizeof(kMobileWriteModeLabels[0]))))
+		{
+			SetMobileGlobalWriteMode(sim,
+				kMobileWriteModeValues[writeModeIdx]);
+		}
+
+		switch (g_ATOptions.mDefaultWriteMode) {
+		case kATMediaWriteMode_RO:
+			ATTouchMutedText(
+				"Games see every disk as write-protected. Use this for "
+				"demos or a guaranteed clean start.");
+			break;
+
+		case kATMediaWriteMode_VRWSafe:
+			ATTouchMutedText(
+				"Games can save while you play, but changes are discarded "
+				"when the disk is ejected or Altirra closes.");
+			break;
+
+		case kATMediaWriteMode_VRW:
+			ATTouchMutedText(
+				"Temporary saving, with disk formatting allowed. Changes are "
+				"discarded when the disk is ejected or Altirra closes.");
+			break;
+
+		case kATMediaWriteMode_RW:
+			ATTouchMutedText(
+				"Saves game progress and high scores between sessions. "
+				"Altirra keeps a protected local copy; the source disk image "
+				"is not changed.");
+			break;
+		}
+		ATTouchMutedText(
+			"Changes apply to all drives now and become the default for "
+			"disks mounted later.");
 
 		// Footer: global emulation-level segmented control
 		ImGui::Spacing();

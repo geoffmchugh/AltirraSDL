@@ -35,11 +35,6 @@ struct SetupWizardState {
 	// Joystick mappings doesn't pointlessly throw away the user's game.
 	bool needsHardwareReset = false;
 
-	// True once the joystick page (35) has auto-activated the
-	// hardware-appropriate default for port 1 in this session.  Cleared
-	// by Reset() so a fresh wizard session re-seeds.
-	bool joystickPageSeeded = false;
-
 	// True once the Hardware Add-ons page (32) has applied its
 	// experience-driven seed.  Without this guard the seed would re-run
 	// every frame the page is displayed, undoing user toggles.
@@ -105,11 +100,7 @@ void Wiz_Finish(ATSimulator &sim, ATUIState &state, SDL_Window *window);
 void ATUIDoFirmwareScan(const char *utf8path);
 
 // Joystick page (35) helpers.  Both renderers list the input maps that
-// touch physical port 1 and let the user pick one as a radio-style
-// selection (matching Input > Port 1).  When the user reaches the page
-// and no port-1 map is currently active, Wiz_SeedDefaultPort1Map
-// activates the canonical "Arrow Keys -> Joystick (port 1)" map so
-// pressing Next is a one-click confirmation of a sensible default.
+// touch physical port 1 and let the user independently enable them.
 class ATInputManager;
 class ATInputMap;
 
@@ -123,21 +114,6 @@ struct WizPortMapEntry {
 // alphabetically sorted, with `active` set per current activation.
 void Wiz_GatherPortMaps(ATInputManager &im, int portIdx,
 	std::vector<WizPortMapEntry> &outEntries);
-
-// Activate `chosen` for `portIdx`, deactivating all other maps that
-// touch the same port (radio behaviour, matches Input > Port submenu).
-void Wiz_ActivatePortMap(ATInputManager &im,
-	const std::vector<WizPortMapEntry> &entries, ATInputMap *chosen);
-
-// If no map is currently active for `portIdx`, pick the canonical
-// default for the active hardware mode and activate it: "Arrow Keys ->
-// Joystick (port 1)" for computer hardware, "Keyboard -> 5200
-// Controller (absolute; port 1)" for the 5200.  Falls back to any
-// "Arrow"-named map otherwise.  Called once when the user first lands
-// on the joystick page; safe no-op when a map is already active or no
-// suitable default exists.
-void Wiz_SeedDefaultPort1Map(ATInputManager &im,
-	std::vector<WizPortMapEntry> &entries);
 
 // =========================================================================
 // Hardware Add-ons page (32) — recommended expansions

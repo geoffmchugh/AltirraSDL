@@ -38,7 +38,6 @@ IATSourceWindow *ATImGuiFindSourceWindow(const wchar_t *) { return nullptr; }
 IATSourceWindow *ATImGuiOpenSourceWindow(const wchar_t *) { return nullptr; }
 
 void ATUISetPanZoomToolActive(bool) {}
-void ATAdaptiveInput_ApplyAfterHardwareSwitch() {}
 void ATUIPushDeferred(ATDeferredActionType, const char *, int) {}
 void ATSetFullscreen(bool) {}
 

@@ -34,7 +34,7 @@
 #include "ui_mode.h"
 #include "inputmanager.h"
 #include "inputmap.h"
-#include "adaptive_input.h"
+#include "input_selection.h"
 #include "display_backend.h"
 #include <at/atcore/media.h>
 
@@ -564,81 +564,20 @@ static void WizMobile_HardwareAddons() {
 }
 
 static void WizMobile_Joystick() {
-	const bool is5200 =
-		(g_sim.GetHardwareMode() == kATHardwareMode_5200);
-
 	ATInputManager *pIM = g_sim.GetInputManager();
 	if (!pIM) {
 		ATTouchMutedText("Input manager unavailable.");
 		return;
 	}
 
-	const bool adaptive = ATAdaptiveInput::IsEnabled();
-
-	if (adaptive) {
-		// Adaptive on (default).  Skip the "pick a map" exercise
-		// entirely — the user's controls are already wired up.  Just
-		// confirm what works and offer a way out for power users.
-		if (is5200) {
-			ImGui::TextWrapped(
-				"Controls are auto-configured.  Whatever input source "
-				"you have connected — keyboard, gamepad — drives the "
-				"5200 controller on port 1.  The on-screen joypad in "
-				"Gaming Mode also drives it.");
-		} else {
-			ImGui::TextWrapped(
-				"Controls are auto-configured.  Keyboard arrows, "
-				"numpad, any connected gamepad, and the on-screen "
-				"joypad in Gaming Mode all drive joystick port 1 at "
-				"the same time.  Just play.");
-		}
-		ImGui::Dummy(ImVec2(0, dp(8.0f)));
-
-		bool flag = adaptive;
-		if (ATTouchToggle("Adaptive input (recommended)", &flag))
-			ATAdaptiveInput::SetEnabled(flag);
-		ImGui::Dummy(ImVec2(0, dp(4.0f)));
-
-		ATTouchMutedText(
-			"Turn this off if you want exclusive control — only one "
-			"input source bound to port 1.  You can change this any "
-			"time from Settings > Controls.");
-		return;
-	}
-
-	// Adaptive off — show the original single-map picker so power
-	// users can lock port 1 to one specific source.  This matches the
-	// pre-Adaptive behaviour exactly.
-	if (is5200) {
-		ImGui::TextWrapped(
-			"Pick the input mapping for 5200 controller port 1.  A "
-			"keyboard-to-5200-Controller map is preselected as a "
-			"sensible default.\n\n"
-			"Turn Adaptive Input back on to let every connected source "
-			"drive port 1 simultaneously.");
-	} else {
-		ImGui::TextWrapped(
-			"Pick the input mapping for joystick port 1.  \"Arrow Keys "
-			"-> Joystick (port 1)\" is preselected as a sensible "
-			"default.\n\n"
-			"Turn Adaptive Input back on to let every connected source "
-			"(keyboard, gamepad, on-screen joypad) drive port 1 "
-			"simultaneously.");
-	}
-	ImGui::Dummy(ImVec2(0, dp(8.0f)));
-
-	bool flag = adaptive;
-	if (ATTouchToggle("Adaptive input (recommended)", &flag))
-		ATAdaptiveInput::SetEnabled(flag);
+	ImGui::TextWrapped(
+		"Choose every input source you want to use for controller port 1. "
+		"Selections combine and stay the same in Desktop Mode, Gaming "
+		"Mode, and after restart.");
 	ImGui::Dummy(ImVec2(0, dp(8.0f)));
 
 	std::vector<WizPortMapEntry> entries;
 	Wiz_GatherPortMaps(*pIM, 0, entries);
-
-	if (!g_setupWiz.joystickPageSeeded) {
-		Wiz_SeedDefaultPort1Map(*pIM, entries);
-		g_setupWiz.joystickPageSeeded = true;
-	}
 
 	bool anyActive = false;
 	for (auto &e : entries) if (e.active) { anyActive = true; break; }
@@ -648,7 +587,7 @@ static void WizMobile_Joystick() {
 		ImVec2(-1, dp(48.0f)),
 		!anyActive ? ATTouchButtonStyle::Accent : ATTouchButtonStyle::Neutral))
 	{
-		Wiz_ActivatePortMap(*pIM, entries, nullptr);
+		ATInputSelection::ClearPort(*pIM, 0);
 	}
 	ImGui::Dummy(ImVec2(0, dp(4.0f)));
 
@@ -660,7 +599,7 @@ static void WizMobile_Joystick() {
 			e.active ? ATTouchButtonStyle::Accent
 			         : ATTouchButtonStyle::Neutral))
 		{
-			Wiz_ActivatePortMap(*pIM, entries, e.map);
+			ATInputSelection::Toggle(*pIM, e.map);
 		}
 		ImGui::PopID();
 		ImGui::Dummy(ImVec2(0, dp(4.0f)));

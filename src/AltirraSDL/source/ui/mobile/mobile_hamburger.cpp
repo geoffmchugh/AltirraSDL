@@ -42,6 +42,7 @@
 #include "altirra_icons.h"
 #ifdef ALTIRRA_NETPLAY_ENABLED
 #include "../netplay/ui_netplay.h"
+#include "netplay/netplay_glue.h"
 #endif
 
 extern ATSimulator g_sim;
@@ -189,11 +190,23 @@ void RenderHamburgerMenu(ATSimulator &sim, ATUIState &uiState,
 			ImGui::Spacing();
 		}
 
-		// Disk Drives — mobile-friendly full-screen manager
+		// Disk Drives — mobile-friendly full-screen manager. Disk changes
+		// are local-only and would diverge a lockstep peer, so mirror the
+		// Desktop dialog's session gate here.
+#ifdef ALTIRRA_NETPLAY_ENABLED
+		const bool diskDrivesLocked = ATNetplayGlue::IsSessionEngaged();
+		ImGui::BeginDisabled(diskDrivesLocked);
+#endif
 		if (ATTouchButton("Disk Drives", btnSize,
 				ATTouchButtonStyle::Neutral, ICON_MD_ALBUM)) {
 			mobileState.currentScreen = ATMobileUIScreen::DiskManager;
 		}
+#ifdef ALTIRRA_NETPLAY_ENABLED
+		ImGui::EndDisabled();
+		if (diskDrivesLocked)
+			ATTouchMutedText(
+				"Disk changes are locked during an online session.");
+#endif
 		ImGui::Spacing();
 
 		// Virtual Keyboard toggle

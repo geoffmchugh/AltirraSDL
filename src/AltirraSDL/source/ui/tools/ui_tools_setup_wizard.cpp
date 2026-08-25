@@ -56,7 +56,7 @@
 #include "media/metadata_settings.h"
 #include "inputmanager.h"
 #include "inputmap.h"
-#include "adaptive_input.h"
+#include "input_selection.h"
 #include "setup_wizard_shared.h"
 #include "devicemanager.h"
 #include <at/atcore/deviceimpl.h>
@@ -81,7 +81,6 @@ void SetupWizardState::Reset() {
 	scanExisting = 0;
 	scanMessage.clear();
 	needsHardwareReset = false;
-	joystickPageSeeded = false;
 	addonsPageSeeded = false;
 }
 
@@ -916,80 +915,6 @@ void Wiz_GatherPortMaps(ATInputManager &im, int portIdx,
 		});
 }
 
-void Wiz_ActivatePortMap(ATInputManager &im,
-	const std::vector<WizPortMapEntry> &entries, ATInputMap *chosen)
-{
-	for (const auto &e : entries)
-		im.ActivateInputMap(e.map, e.map == chosen);
-}
-
-void Wiz_SeedDefaultPort1Map(ATInputManager &im,
-	std::vector<WizPortMapEntry> &entries)
-{
-	bool anyActive = false;
-	for (const auto &e : entries) {
-		if (e.active) { anyActive = true; break; }
-	}
-	if (anyActive)
-		return;
-
-	// Match by substring so a custom user map doesn't shadow the
-	// canonical one as long as the canonical one is registered.
-	auto containsCI = [](const wchar_t *s, const wchar_t *needle) {
-		if (!s || !needle) return false;
-		size_t nlen = 0; while (needle[nlen]) ++nlen;
-		for (; *s; ++s) {
-			size_t i = 0;
-			while (i < nlen
-				&& s[i]
-				&& towlower((wint_t)s[i]) == towlower((wint_t)needle[i]))
-				++i;
-			if (i == nlen) return true;
-		}
-		return false;
-	};
-
-	const bool is5200 = (g_sim.GetHardwareMode() == kATHardwareMode_5200);
-
-	ATInputMap *exact = nullptr;
-	ATInputMap *fallback = nullptr;
-	for (auto &e : entries) {
-		const wchar_t *nm = e.map->GetName();
-		if (!nm) continue;
-		if (is5200) {
-			// Canonical 5200 default: "Keyboard -> 5200 Controller
-			// (absolute; port 1)".  Prefer absolute over relative since
-			// the absolute map matches what the Windows wizard's "5200"
-			// hardware path lands on.
-			if (containsCI(nm, L"5200 Controller")
-				&& containsCI(nm, L"absolute"))
-			{
-				exact = e.map;
-				break;
-			}
-			// Fallback: any 5200 Controller map (relative/absolute/etc).
-			if (!fallback && containsCI(nm, L"5200 Controller"))
-				fallback = e.map;
-		} else {
-			// Canonical computer default: "Arrow Keys -> Joystick (port 1)".
-			if (containsCI(nm, L"Arrow Keys")
-				&& containsCI(nm, L"Joystick"))
-			{
-				exact = e.map;
-				break;
-			}
-			if (!fallback && containsCI(nm, L"Arrow"))
-				fallback = e.map;
-		}
-	}
-
-	ATInputMap *chosen = exact ? exact : fallback;
-	if (chosen) {
-		Wiz_ActivatePortMap(im, entries, chosen);
-		for (auto &x : entries) x.active = (x.map == chosen);
-	}
-}
-
 void Wiz_Finish(ATSimulator &sim, ATUIState &state, SDL_Window *window) {
 	(void)window;
 
@@ -1634,107 +1559,27 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 				break;
 			}
 
-			const bool is5200 =
-				(sim.GetHardwareMode() == kATHardwareMode_5200);
-			const bool adaptive = ATAdaptiveInput::IsEnabled();
-
-			// Adaptive checkbox up-front — flips between the
-			// "everything just works" confirmation copy and the
-			// power-user manual picker below.
-			bool flag = adaptive;
-			if (ImGui::Checkbox(
-				"Adaptive input (recommended)", &flag))
-			{
-				ATAdaptiveInput::SetEnabled(flag);
-			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("(?)");
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-				ImGui::TextUnformatted(
-					"On (default): keyboard arrows / numpad / any "
-					"connected gamepad / on-screen joypad in Gaming "
-					"Mode all drive port 1 simultaneously.\n\n"
-					"Off: lock port 1 to a single source you pick "
-					"below.");
-				ImGui::PopTextWrapPos();
-				ImGui::EndTooltip();
-			}
-			ImGui::Spacing();
-
-			if (adaptive) {
-				if (is5200) {
-					ImGui::TextWrapped(
-						"Controls are auto-configured.  Whatever "
-						"input source you have connected — keyboard "
-						"or gamepad — drives the 5200 controller on "
-						"port 1.\n\n"
-						"You can change this any time from the Input "
-						"> Port 1 menu, and define your own mappings "
-						"under Input > Input Mappings."
-					);
-				} else {
-					ImGui::TextWrapped(
-						"Controls are auto-configured.  Keyboard "
-						"arrows, numpad, any connected gamepad, and "
-						"the on-screen joypad in Gaming Mode all "
-						"drive joystick port 1 at the same time.\n\n"
-						"You can change this any time from the Input "
-						"> Port 1 menu, and define your own mappings "
-						"under Input > Input Mappings."
-					);
-				}
-				break;
-			}
-
-			// Adaptive off: original single-map picker for users who
-			// want exclusive lock-bind on one input source.
-			if (is5200) {
-				ImGui::TextWrapped(
-					"Pick the input mapping for 5200 controller port 1. "
-					"The keyboard-to-5200-Controller map is preselected as "
-					"a sensible default.\n\n"
-					"You can change this any time from the Input > Port 1 "
-					"menu, and define your own mappings under Input > "
-					"Input Mappings."
-				);
-			} else {
-				ImGui::TextWrapped(
-					"Pick the input mapping for joystick port 1. "
-					"\"Arrow Keys -> Joystick (port 1)\" is preselected as a "
-					"sensible default — most Atari games use port 1 and the "
-					"keyboard arrow keys feel natural for movement.\n\n"
-					"You can change this any time from the Input > Port 1 "
-					"menu, and define your own mappings under Input > "
-					"Input Mappings."
-				);
-			}
+			ImGui::TextWrapped(
+				"Enable every input source you want to use for controller port 1. "
+				"Selections combine and remain exactly as chosen across Desktop "
+				"Mode, Gaming Mode, and restarts.");
 			ImGui::Spacing();
 
 			std::vector<WizPortMapEntry> entries;
 			Wiz_GatherPortMaps(*pIM, 0, entries);
 
-			// Auto-seed Arrow Keys the first time the user lands
-			// here in this wizard session.  joystickPageSeeded is
-			// cleared by Reset() so each new session reseeds.
-			if (!g_setupWiz.joystickPageSeeded) {
-				Wiz_SeedDefaultPort1Map(*pIM, entries);
-				g_setupWiz.joystickPageSeeded = true;
-			}
-
 			bool anyActive = false;
 			for (auto &e : entries) if (e.active) { anyActive = true; break; }
 
-			if (ImGui::RadioButton("None", !anyActive)) {
-				Wiz_ActivatePortMap(*pIM, entries, nullptr);
-			}
+			if (ImGui::RadioButton("None", !anyActive))
+				ATInputSelection::ClearPort(*pIM, 0);
 
 			for (size_t i = 0; i < entries.size(); ++i) {
 				auto &e = entries[i];
 				ImGui::PushID((int)i);
-				if (ImGui::RadioButton(e.name.c_str(), e.active))
-					Wiz_ActivatePortMap(*pIM, entries, e.map);
+				bool enabled = e.active;
+				if (ImGui::Checkbox(e.name.c_str(), &enabled))
+					ATInputSelection::Toggle(*pIM, e.map);
 				ImGui::PopID();
 			}
 			break;

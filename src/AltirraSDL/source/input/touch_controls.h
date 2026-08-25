@@ -56,10 +56,11 @@ void ATTouchControls_SetHapticEnabled(bool enabled);
 //   trigger: fire A held
 // State persists until the next call; pass (0, false) to centre the
 // stick and release fire.  Only edges are forwarded to ATInputManager,
-// using the same unit-0 kATInputCode_JoyStick1* / JoyButton0 codes the
-// touch stick and physical gamepads use, so the default input map
-// routes it to joystick port 0 with no extra binding.  Independent of
-// the touch-stick state; ATTouchControls_ReleaseAll() clears it too.
+// using the same unit-0 game-controller codes as the touch stick and
+// physical gamepads (stick directions in computer mode, POV directions
+// in 5200 mode, and JoyButton0), so the default input map routes it with
+// no extra binding. Independent of the touch-stick state;
+// ATTouchControls_ReleaseAll() clears it too.
 void ATTouchControls_SetExternalJoystick(uint8 dirMask, bool trigger);
 
 // Show/hide the console-key row (START/SELECT/OPTION/>>) independently

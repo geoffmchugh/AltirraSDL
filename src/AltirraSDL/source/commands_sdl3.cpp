@@ -13,6 +13,7 @@
 #include "uiaccessors.h"
 #include "inputmanager.h"
 #include "inputmap.h"
+#include "input/input_selection.h"
 #include "inputdefs.h"
 #include "inputcontroller.h"
 #include "antic.h"
@@ -74,6 +75,7 @@ static void CmdCycleQuickMaps() {
 		return;
 
 	ATInputMap *pMap = pIM->CycleQuickMaps();
+	ATInputSelection::CommitSelections();
 	IATUIRenderer *pUIR = g_sim.GetUIRenderer();
 
 	if (pUIR) {
@@ -90,6 +92,7 @@ static void CmdSelectQuickMap(ATInputControllerType type) {
 		return;
 
 	ATInputMap *pMap = pIM->CycleQuickMaps(&type);
+	ATInputSelection::CommitSelections();
 	IATUIRenderer *pUIR = g_sim.GetUIRenderer();
 
 	if (pUIR) {

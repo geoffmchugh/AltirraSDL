@@ -61,6 +61,7 @@ static float s_joyBaseX = 0, s_joyBaseY = 0;  // Touch-down position (pixels)
 static float s_joyCurX = 0, s_joyCurY = 0;    // Current position (pixels)
 static uint8 s_joyDirMask = 0;                // Active directions (bit 0=L,1=R,2=U,3=D)
 static uint8 s_effectiveJoyDirMask = 0;
+static bool s_effectiveJoyUses5200Codes = false;
 
 // External joystick state (embedder hook: JS tilt/gamepad).  Tracked
 // separately from the touch stick, then combined before events are sent.
@@ -150,48 +151,63 @@ static uint8 ComputeDirectionMask(float dx, float dy, float deadZone) {
 }
 
 // Apply direction mask change to ATInputManager
-static void ApplyDirectionMask(uint8 newMask, uint8 oldMask) {
+static void ApplyDirectionMask(uint8 newMask, uint8 oldMask, bool is5200) {
 	if (!s_pInputManager)
 		return;
 
-	// Use unit 0 with the kATInputCode_JoyStick1* codes — these are
-	// the SAME codes that physical SDL gamepads emit in
-	// joystick_sdl3.cpp, so the default input-map bindings (which
-	// route JoyStick1Left/Right/Up/Down on unit 0 to port 0 of the
-	// Atari joystick) pick them up automatically.  The kATInputCode_JoyPOV*
-	// codes we used previously require an explicit POV-hat binding
-	// that the default map doesn't create.
+	// Use stick-direction codes for computer mode, matching the generic
+	// Gamepad -> Joystick map.  The stock 5200 game-controller map binds
+	// the digital pad as POV directions instead, so use those in 5200 mode.
 	struct DirEntry {
 		uint8 bit;
-		uint32 code;
+		uint32 stickCode;
+		uint32 povCode;
 	};
 
 	static const DirEntry kDirs[] = {
-		{ 0x01, kATInputCode_JoyStick1Left  },
-		{ 0x02, kATInputCode_JoyStick1Right },
-		{ 0x04, kATInputCode_JoyStick1Up    },
-		{ 0x08, kATInputCode_JoyStick1Down  },
+		{ 0x01, kATInputCode_JoyStick1Left,  kATInputCode_JoyPOVLeft  },
+		{ 0x02, kATInputCode_JoyStick1Right, kATInputCode_JoyPOVRight },
+		{ 0x04, kATInputCode_JoyStick1Up,    kATInputCode_JoyPOVUp    },
+		{ 0x08, kATInputCode_JoyStick1Down,  kATInputCode_JoyPOVDown  },
 	};
-
 	for (const auto &d : kDirs) {
+		const uint32 code = is5200 ? d.povCode : d.stickCode;
 		bool wasDown = (oldMask & d.bit) != 0;
 		bool isDown  = (newMask & d.bit) != 0;
 		if (isDown && !wasDown)
-			s_pInputManager->OnButtonDown(0, d.code);
+			s_pInputManager->OnButtonDown(0, code);
 		else if (!isDown && wasDown)
-			s_pInputManager->OnButtonUp(0, d.code);
+			s_pInputManager->OnButtonUp(0, code);
 	}
 }
 
 static void UpdateEffectiveJoystick() {
 	const uint8 newMask = (s_joyDirMask | s_extJoyDirMask) & 0x0F;
-	if (newMask != s_effectiveJoyDirMask) {
-		ApplyDirectionMask(newMask, s_effectiveJoyDirMask);
+	const bool is5200 = g_sim.GetHardwareMode() == kATHardwareMode_5200;
+	const bool hardwareChanged = is5200 != s_effectiveJoyUses5200Codes;
+	if (hardwareChanged) {
+		// A hardware switch can happen while a finger or embedder direction
+		// is held. Release the old code family before pressing the new one.
+		ApplyDirectionMask(0, s_effectiveJoyDirMask,
+			s_effectiveJoyUses5200Codes);
+		ApplyDirectionMask(newMask, 0, is5200);
+		s_effectiveJoyDirMask = newMask;
+		s_effectiveJoyUses5200Codes = is5200;
+	} else if (newMask != s_effectiveJoyDirMask) {
+		ApplyDirectionMask(newMask, s_effectiveJoyDirMask, is5200);
 		s_effectiveJoyDirMask = newMask;
 	}
 
 	const bool fireHeld = s_fireAHeld || s_extTrigHeld;
 	bool fireA = fireHeld;
+	if (hardwareChanged && s_effectiveFireAHeld) {
+		// RebuildMappings() creates a new controller but intentionally does
+		// not replay already-held input codes. Cycle fire so the new mapping
+		// receives the held state too.
+		if (s_pInputManager)
+			s_pInputManager->OnButtonUp(0, kATInputCode_JoyButton0);
+		s_effectiveFireAHeld = false;
+	}
 
 	if (s_autoFireEnabled && fireHeld) {
 		// Auto-fire: replace the continuous hold with a square wave.
@@ -301,8 +317,9 @@ void ATTouchControls_ReleaseAll() {
 }
 
 void ATTouchControls_Tick() {
-	if (s_autoFireEnabled && (s_fireAHeld || s_extTrigHeld))
-		UpdateEffectiveJoystick();
+	// Also detects hardware-mode changes while a direction or fire button
+	// is held, independently of touch movement and autofire.
+	UpdateEffectiveJoystick();
 }
 
 // Embedder hook — see touch_controls.h.  Hiding mid-press releases any
