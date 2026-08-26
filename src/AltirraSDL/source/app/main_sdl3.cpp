@@ -21,6 +21,7 @@
 extern "C" void VDWASMTimerTick();
 extern void ATWasmBridgeTick();
 extern "C" void ATWasmSyncFSOut();
+extern "C" void ATWasmPersistSettings();
 
 // Read by the wizard gate below.  Defined in wasm_bridge.cpp with
 // extern "C" linkage so the WASM linker can bind the call site to the
@@ -2854,9 +2855,10 @@ int main(int argc, char *argv[]) {
 		VDWASMTimerTick();
 		ATWasmBridgeTick();
 
-		// Periodic IDBFS flush so in-memory writes (emulator settings,
-		// save states, registry updates, uploaded files that somehow
-		// skipped the upload-time syncfs) persist to IndexedDB within
+		// Periodically snapshot live settings and flush IDBFS so writes
+		// (emulator settings, save states, registry updates, or uploaded
+		// files that skipped the upload-time syncfs) persist to IndexedDB
+		// within
 		// a few seconds of happening.  pagehide is a best-effort
 		// fire-and-forget safety net; this is the primary durability
 		// mechanism and covers the common "user closes the tab"
@@ -2868,6 +2870,7 @@ int main(int argc, char *argv[]) {
 		static int s_wasmFlushTick = 0;
 		if (++s_wasmFlushTick >= 600) {
 			s_wasmFlushTick = 0;
+			ATWasmPersistSettings();
 			ATWasmSyncFSOut();
 		}
 #endif

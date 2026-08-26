@@ -108,17 +108,26 @@ namespace {
 	bool g_fallbackOpenNextFrame = false;
 
 	std::string ParentPath(std::string path) {
-		while (path.size() > 1 && path.back() == '/')
+		auto isSeparator = [](char c) { return c == '/' || c == '\\'; };
+		auto isDriveRoot = [&]() {
+			return path.size() == 3 && path[1] == ':'
+				&& isSeparator(path[2]);
+		};
+
+		while (path.size() > 1 && isSeparator(path.back()) && !isDriveRoot())
 			path.pop_back();
-		const size_t slash = path.find_last_of('/');
-		if (slash == std::string::npos || slash == 0)
+
+		VDStringA parent = VDFileSplitPathLeft(VDStringA(path.c_str()));
+		if (parent.empty())
 			return "/";
-		return path.substr(0, slash);
+		return std::string(parent.c_str());
 	}
 
 	std::string JoinPath(const std::string& dir, const std::string& name) {
 		if (dir.empty() || dir == "/")
 			return "/" + name;
+		if (dir.back() == '/' || dir.back() == '\\')
+			return dir + name;
 		return dir + "/" + name;
 	}
 
@@ -744,7 +753,7 @@ namespace {
 
 	// Invoke the JS-side opener.  Declared with EM_JS so we can call it
 	// from C without a stringified Runtime_run_script hop.  kind=0 means
-	// open, kind=1 means save.
+	// open, kind=1 means save, and kind=2 means select a VFS folder.
 	EM_JS(void, _altirra_wasm_open_picker,
 	      (long nKey, const char *category, const char *filters, int kind), {
 		if (typeof window.altirraOpenFilePicker === 'function') {
@@ -880,8 +889,20 @@ void ATUIShowOpenFolderDialog(
 	const char *fallbackLocation,
 	bool allow_many)
 {
-	SDL_ShowOpenFolderDialog(callback, userdata, window, fallbackLocation,
-		allow_many);
+	DialogContext *ctx = MakeContext(nKey, callback, userdata, fallbackLocation);
+	ctx->mode = DialogMode::OpenFolder;
+	ctx->allowMany = allow_many;
+
+	if (g_pPendingWasmDialog) {
+		DialogContext *stale = g_pPendingWasmDialog;
+		g_pPendingWasmDialog = nullptr;
+		const char *noList[1] = { nullptr };
+		DialogTrampoline(stale, noList, 0);
+	}
+
+	g_pPendingWasmDialog = ctx;
+	_altirra_wasm_open_picker(nKey,
+		WasmCategoryForDialogKey(nKey), "", 2);
 }
 
 #else // !__EMSCRIPTEN__

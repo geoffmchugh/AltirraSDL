@@ -75,7 +75,7 @@ VDStringW VDFileSplitPathLeft(const VDStringW& s) {
 	const wchar_t *base = s.c_str();
 	const wchar_t *p = VDFileSplitPath(base);
 	if (p == base) return VDStringW();
-	return VDStringW(base, p - 1);
+	return VDStringW(base, p);
 }
 
 VDStringW VDFileSplitPathRight(const VDStringW& s) {
@@ -86,7 +86,7 @@ VDString VDFileSplitPathLeft(const VDString& s) {
 	const char *base = s.c_str();
 	const char *p = VDFileSplitPath(base);
 	if (p == base) return VDString();
-	return VDString(base, p - 1);
+	return VDString(base, p);
 }
 
 VDString VDFileSplitPathRight(const VDString& s) {
@@ -100,7 +100,7 @@ VDStringSpanW VDFileSplitPathLeftSpan(const VDStringSpanW& s) {
 	const wchar_t *last = base;
 	while (p != end) {
 		if (*p == L'/' || *p == L'\\')
-			last = p;
+			last = p + 1;
 		++p;
 	}
 	return VDStringSpanW(base, last);
@@ -125,7 +125,7 @@ VDStringSpanA VDFileSplitPathLeftSpan(const VDStringSpanA& s) {
 	const char *last = base;
 	for (const char *p = base; p != end; ++p)
 		if (*p == '/' || *p == '\\')
-			last = p;
+			last = p + 1;
 	return VDStringSpanA(base, last);
 }
 

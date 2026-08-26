@@ -231,12 +231,28 @@ void ATDiskInterface::LoadDisk(const wchar_t *s) {
 
 	size_t len = wcslen(s);
 
+	// Virtual-folder mounts are persisted by appending /* (DOS 2) or
+	// /** (SpartaDOS) to the host directory. Non-Windows SDL platforms
+	// use '/', while Windows (including Windows-SDL) uses '\\'. Accept
+	// both spellings so the persisted path round-trips everywhere.
 	if (len >= 3) {
-		if (!wcscmp(s + len - 3, L"\\**")) {
-			VDStringW t(s, s + len - 3);
-			return MountFolder(t.c_str(), true);
-		} else if (!wcscmp(s + len - 2, L"\\*")) {
+		const wchar_t separator = s[len - 3];
+
+		if ((separator == L'\\' || separator == L'/')
+			&& s[len - 2] == L'*' && s[len - 1] == L'*') {
+			// Keep the separator. Besides being harmless to VDMakePath(), this
+			// preserves root folders (/** -> / and C:\\** -> C:\\).
 			VDStringW t(s, s + len - 2);
+			return MountFolder(t.c_str(), true);
+		}
+	}
+
+	if (len >= 2) {
+		const wchar_t separator = s[len - 2];
+
+		if ((separator == L'\\' || separator == L'/')
+			&& s[len - 1] == L'*') {
+			VDStringW t(s, s + len - 1);
 			return MountFolder(t.c_str(), false);
 		}
 	}

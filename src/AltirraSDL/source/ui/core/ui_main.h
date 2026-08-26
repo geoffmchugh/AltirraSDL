@@ -180,6 +180,7 @@ enum ATDeferredActionType {
 	kATDeferred_AttachCartridge,
 	kATDeferred_AttachSecondaryCartridge,
 	kATDeferred_AttachDisk,        // uses mInt for drive index
+	kATDeferred_MountFolder,       // mInt: drive index | 0x100 for SDFS
 	kATDeferred_LoadState,
 	kATDeferred_SaveState,
 	kATDeferred_SaveCassette,

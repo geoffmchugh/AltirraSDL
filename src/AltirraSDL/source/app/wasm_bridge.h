@@ -42,6 +42,11 @@ extern "C" void ATWasmOnFileUploaded(const char* vfsPath, int bootNow);
 // request a flush at shutdown too.  Safe to call multiple times.
 extern "C" void ATWasmSyncFSOut();
 
+// Snapshot live settings into settings.ini before JS flushes IDBFS.
+// Browser teardown does not run the native main() cleanup path, so syncfs
+// alone would lose runtime-only state such as mounted disks and cartridges.
+extern "C" void ATWasmPersistSettings();
+
 // Re-scan the firmware directory (/home/web_user/firmware) so any
 // files the user has uploaded since the last scan become visible to
 // the firmware manager.  JS calls this once at startup (after the

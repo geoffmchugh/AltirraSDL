@@ -345,21 +345,13 @@ static void MountFolderCallback(void *userdata, const char * const *filelist, in
 	bool sdfs = info->sdfs;
 	delete info;
 
-	if (driveIdx < 0 || driveIdx >= 15) return;
+	if (driveIdx < 0 || driveIdx >= 15)
+		return;
 
-	VDStringW widePath = VDTextU8ToW(filelist[0], -1);
-	try {
-		ATDiskInterface& di = g_sim.GetDiskInterface(driveIdx);
-		di.MountFolder(widePath.c_str(), sdfs);
-
-		ATDiskEmulator& disk = g_sim.GetDiskDrive(driveIdx);
-		if (di.GetClientCount() < 2)
-			disk.SetEnabled(true);
-
-		LOG_INFO("UI", "Mounted folder on D%d: %s (%s)", driveIdx + 1, filelist[0], sdfs ? "SDFS" : "DOS2");
-	} catch (const MyError& e) {
-		LOG_ERROR("UI", "Mount folder failed on D%d: %s", driveIdx + 1, e.c_str());
-	}
+	// SDL may invoke native file-dialog callbacks on an arbitrary thread.
+	// Defer all simulator access to the main UI thread.
+	ATUIPushDeferred(kATDeferred_MountFolder, filelist[0],
+		driveIdx | (sdfs ? 0x100 : 0));
 }
 
 static const SDL_DialogFileFilter kDiskFilters[] = {

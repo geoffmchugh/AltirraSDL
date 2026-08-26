@@ -2863,7 +2863,7 @@
 
     // Pick-mode state.  When the native file-dialog path routes through
     // the overlay (see ui_file_dialog_sdl3.cpp's ALTIRRA_WASM branch),
-    // the picker enters either 'open' or 'save' mode.  In pick mode a
+    // the picker enters open, save, or folder mode. In pick mode a
     // row click / Enter returns the chosen path to C via
     // Module._ATWasmOnFilePicked instead of booting.  Closing the
     // overlay sends a NULL pick so the pending SDL callback fires with
@@ -2872,6 +2872,7 @@
     //   null        — normal library-management mode
     //   'open'      — Altirra native dialog: pick an existing file
     //   'save'      — Altirra native dialog: choose a filename to write
+    //   'folder'    — Altirra native dialog: choose an IDBFS directory
     let pickMode = null;
     let pickSaveExt = '';  // suggested extension for save mode
 
@@ -3158,12 +3159,29 @@
     //  IDBFS flush (out direction: VFS → IndexedDB)
     // ───────────────────────────────────────────────────────────────────
     async function syncFsOut() {
-      return new Promise((resolve) => {
+      // Share the bridge's active/pending flags so file-manager writes,
+      // periodic settings snapshots, and pagehide never issue overlapping
+      // IDBFS syncs. Emscripten rejects concurrent syncfs operations.
+      if (Module.altirraSyncFSOutActive) {
+        Module.altirraSyncFSOutPending = true;
+        while (Module.altirraSyncFSOutActive)
+          await new Promise(resolve => setTimeout(resolve, 10));
+        return;
+      }
+
+      Module.altirraSyncFSOutActive = true;
+      Module.altirraSyncFSOutPending = false;
+      await new Promise((resolve) => {
         Module.FS.syncfs(false, (err) => {
           if (err) appendLog('[fs] syncfs(out) failed: ' + err);
           resolve();
         });
       });
+      Module.altirraSyncFSOutActive = false;
+
+      // A bridge request may have arrived while this sync was active.
+      if (Module.altirraSyncFSOutPending)
+        await syncFsOut();
     }
 
     // ───────────────────────────────────────────────────────────────────
@@ -4390,16 +4408,15 @@
     function renderSidebar() {
       fmSidebar.innerHTML = '';
 
-      // "All files" — switches to tree-browse mode.  In pick mode the
-      // tree view's empty/full directory list is unhelpful (the user
-      // wants to pick from their library, not navigate the FS), and
-      // buildListModel forces filter view in pick mode anyway.  Hide
-      // the entry so the sidebar always reflects what's actually
-      // rendered.
-      if (!pickMode) {
+      // "All files" — switches to tree-browse mode. File pickers use the
+      // category views, but a folder picker needs the tree entry so the
+      // user can navigate outside the initially selected category.
+      if (!pickMode || pickMode === 'folder') {
         const allRow = document.createElement('div');
         allRow.className = 'fm-cat'
-          + (viewMode === 'tree' ? ' active' : '');
+          + (viewMode === 'tree'
+              && (pickMode !== 'folder' || currentPath === ROOT)
+            ? ' active' : '');
         allRow.innerHTML =
           '<span class="icon">' + ALL_FILES.icon + '</span>' +
           '<span class="label">' + ALL_FILES.label + '</span>' +
@@ -4426,9 +4443,8 @@
       // list, just above "Other", because users only need it when
       // they're explicitly looking for a folder — keeping it next to
       // the catch-all keeps the visual weight of the primary
-      // categories (Games / Disks / Cassettes …) at the top.  Hidden
-      // in pick mode because picking a folder isn't meaningful for
-      // the file dialogs that route through this overlay.
+      // categories (Games / Disks / Cassettes …) at the top. It stays
+      // hidden during dialogs; folder mode navigates the real tree.
       let sidebarFilters;
       if (pickMode) {
         sidebarFilters = CATEGORIES;
@@ -4446,7 +4462,9 @@
         // but isn't worth the complexity yet.
         const count = runtimeReady ? countFilter(c) : 0;
         const row = document.createElement('div');
-        const isActive = (viewMode === 'filter' && c === activeCategory);
+        const isActive = pickMode === 'folder'
+          ? (viewMode === 'tree' && currentPath === c.dir)
+          : (viewMode === 'filter' && c === activeCategory);
         row.className = 'fm-cat' + (isActive ? ' active' : '');
         row.innerHTML =
           '<span class="icon">' + c.icon + '</span>' +
@@ -4454,10 +4472,15 @@
           '<span class="count">' + count + '</span>';
         row.addEventListener('click', () => {
           activeCategory = c;
-          viewMode = 'filter';
-          clearSelection();
-          fmSearch.value = '';
-          renderFm();
+          if (pickMode === 'folder') {
+            fmSearch.value = '';
+            navigateTo(c.dir);
+          } else {
+            viewMode = 'filter';
+            clearSelection();
+            fmSearch.value = '';
+            renderFm();
+          }
         });
         fmSidebar.appendChild(row);
       }
@@ -4471,11 +4494,10 @@
     function buildListModel() {
       const q = (fmSearch.value || '').toLowerCase().trim();
 
-      // Pick-mode preserves the legacy flat per-category view across
-      // the cross-category search.  We never enter tree mode in pick
-      // mode (the toolbar's "All files" still works but pick-mode
-      // ignores `viewMode` for safety).
-      if (pickMode) {
+      // File pick-mode preserves the legacy flat per-category view across
+      // the cross-category search. File pickers ignore `viewMode` for
+      // safety; folder pickers intentionally use the tree below.
+      if (pickMode && pickMode !== 'folder') {
         const flat = [];
         if (q) {
           for (const c of CATEGORIES) {
@@ -4619,6 +4641,27 @@
         setTimeout(() => input.select(), 20);
       }
 
+      // Folder mode navigates the persistent IDBFS tree and selects the
+      // directory currently shown. This is a browser-visible VFS folder,
+      // not a host path that the WASM process would be unable to reopen.
+      if (pickMode === 'folder') {
+        const bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;align-items:center;'
+          + 'padding:10px 14px;border-bottom:1px solid #2a2a2a;'
+          + 'background:#1a1a1a;';
+        const shown = (currentPath || ROOT).replace(ROOT, '~');
+        bar.innerHTML = '<span style="flex:1;color:#bbb;overflow:hidden;'
+          + 'text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(shown)
+          + '</span><button id="fm-folder-select" class="primary" '
+          + 'style="background:#3a598a;border:1px solid #4872ad;color:#fff;'
+          + 'padding:4px 14px;border-radius:3px;font-size:0.8rem;cursor:pointer;">'
+          + 'Select this folder</button>';
+        fmList.appendChild(bar);
+        bar.querySelector('#fm-folder-select').addEventListener('click', () => {
+          completePick(currentPath || ROOT);
+        });
+      }
+
       const allRows = model.dirs.concat(model.files);
 
       // ── Select-mode header: "(De)Select All" checkbox ─────────────
@@ -4728,6 +4771,26 @@
             if (input) { input.value = r.name; input.focus(); input.select(); }
           });
           actions.appendChild(useBtn);
+        } else if (pickMode === 'folder' && r.isDir) {
+          const open = document.createElement('button');
+          open.className = 'primary';
+          open.textContent = 'Open';
+          open.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navigateTo(r.path);
+          });
+          actions.appendChild(open);
+
+          const pickBtn = document.createElement('button');
+          pickBtn.textContent = 'Select';
+          pickBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            completePick(r.path);
+          });
+          actions.appendChild(pickBtn);
+        } else if (pickMode === 'folder') {
+          // Files are visible for context while navigating, but a folder
+          // dialog must not expose boot/delete/move actions for them.
         } else if (selectMode) {
           // No per-row buttons in select mode — the batch toolbar takes
           // over.  The whole row toggles selection on click.
@@ -4897,6 +4960,9 @@
           } else if (pickMode === 'save') {
             const input = document.getElementById('fm-savename');
             if (input) { input.value = r.name; input.focus(); input.select(); }
+          } else if (pickMode === 'folder') {
+            // Files are context-only in a folder picker.
+            return;
           } else if (rowCat && rowCat.primary) {
             bridgeBoot(r.path);
           }
@@ -4908,7 +4974,7 @@
         // guard lives in moveSinglePath, so dropping a folder into
         // itself or a descendant fails with a friendly toast instead
         // of breaking the FS.
-        if (r.isDir) {
+        if (r.isDir && !pickMode) {
           row.draggable = true;
           row.addEventListener('dragstart', (e) => {
             e.dataTransfer.setData('text/altirra-vfs-path', r.path);
@@ -4995,9 +5061,10 @@
         // active filter is already conveyed by the highlighted sidebar
         // row, and a length-changing title was shifting the header
         // buttons sideways every time the user picked a category.
-        if (pickMode === 'open')      titleEl.textContent = 'Select a file';
-        else if (pickMode === 'save') titleEl.textContent = 'Save as…';
-        else                           titleEl.textContent = 'Files';
+        if (pickMode === 'open')        titleEl.textContent = 'Select a file';
+        else if (pickMode === 'save')   titleEl.textContent = 'Save as…';
+        else if (pickMode === 'folder') titleEl.textContent = 'Select a folder';
+        else                             titleEl.textContent = 'Files';
       }
       // New Folder needs a parent dir to create under.  In tree mode
       // that's currentPath; in filter mode the parent is the active
@@ -7002,6 +7069,7 @@
     //
     //    kind = 0 → open  (user picks an existing file)
     //    kind = 1 → save  (user types a filename, we synthesise a path)
+    //    kind = 2 → folder (user selects an existing IDBFS directory)
     //
     //  filters is a ';'-separated list of extensions ("xex;atr;car").
     //  Currently informational only — the category gating already
@@ -7012,8 +7080,8 @@
       jlog('picker open: key=0x' + (nKey>>>0).toString(16),
            'category=' + category,
            'filters=' + (filters || '(none)'),
-           'kind=' + (kind===1?'save':'open'));
-      pickMode = (kind === 1) ? 'save' : 'open';
+           'kind=' + (kind===2?'folder':(kind===1?'save':'open')));
+      pickMode = (kind === 2) ? 'folder' : ((kind === 1) ? 'save' : 'open');
       pickSaveExt = '';
       if (pickMode === 'save' && filters) {
         // Pick the first concrete extension from the filter list.
@@ -7025,6 +7093,11 @@
         }
       }
       fmBackdrop.classList.add('pick');
+      if (pickMode === 'folder') {
+        viewMode = 'tree';
+        const c = CATEGORIES.find(c => c.id === category);
+        currentPath = c ? c.dir : ROOT;
+      }
       openFm(category);
       // Render runs from openFm → refresh to apply pick-mode visuals.
       renderFm();
@@ -7155,7 +7228,7 @@
 
     ['dragenter', 'dragover'].forEach((evt) => {
       fmBackdrop.addEventListener(evt, (e) => {
-        if (!fmBackdrop.classList.contains('open')) return;
+        if (!fmBackdrop.classList.contains('open') || pickMode) return;
         e.preventDefault();
         fmBackdrop.classList.add('drag');
       });
@@ -7167,7 +7240,7 @@
       });
     });
     fmBackdrop.addEventListener('drop', (e) => {
-      if (!fmBackdrop.classList.contains('open')) return;
+      if (!fmBackdrop.classList.contains('open') || pickMode) return;
       if (e.dataTransfer && e.dataTransfer.files.length) {
         // Drop on overlay: in tree mode the user is "in" a folder so
         // drop here = upload to that folder.  In filter mode there is
@@ -7185,7 +7258,16 @@
     //  Best-effort IDBFS flush before the page closes
     // ───────────────────────────────────────────────────────────────────
     window.addEventListener('pagehide', () => {
-      if (Module && Module.FS && Module.FS.syncfs) {
+      if (typeof Module === 'undefined') return;
+      if (Module._ATWasmPersistSettings) {
+        try { Module._ATWasmPersistSettings(); } catch (e) {}
+      }
+      // Use the bridge's coalescing guard when available. Calling syncfs()
+      // directly while a periodic flush is active can make IDBFS reject the
+      // second operation and lose this final settings snapshot.
+      if (Module._ATWasmSyncFSOut) {
+        try { Module._ATWasmSyncFSOut(); } catch (e) {}
+      } else if (Module.FS && Module.FS.syncfs) {
         Module.FS.syncfs(false, () => {});
       }
     });

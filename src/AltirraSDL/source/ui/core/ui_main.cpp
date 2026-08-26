@@ -571,6 +571,24 @@ void ATUIPollDeferredActions() {
 				}
 				break;
 			}
+			case kATDeferred_MountFolder: {
+				const int idx = a.mInt & 0xff;
+				const bool sdfs = (a.mInt & 0x100) != 0;
+
+				if (idx >= 0 && idx < 15) {
+					ATDiskInterface& diskIf = g_sim.GetDiskInterface(idx);
+					diskIf.MountFolder(a.path.c_str(), sdfs);
+
+					ATDiskEmulator& disk = g_sim.GetDiskDrive(idx);
+					if (diskIf.GetClientCount() < 2)
+						disk.SetEnabled(true);
+
+					VDStringA path8 = VDTextWToU8(a.path);
+					LOG_INFO("UI", "Mounted folder on D%d: %s (%s)",
+						idx + 1, path8.c_str(), sdfs ? "SDFS" : "DOS2");
+				}
+				break;
+			}
 			case kATDeferred_LoadState: {
 				ATImageLoadContext ctx {};
 				if (g_sim.Load(a.path.c_str(), kATMediaWriteMode_RO, &ctx))

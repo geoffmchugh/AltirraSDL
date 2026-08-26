@@ -70,7 +70,10 @@ extern void ATUIDoFirmwareScan(const char *utf8path);
 #include "simulator.h"
 #include "diskinterface.h"
 #include "cassette.h"
+#include "settings.h"
 extern ATSimulator g_sim;
+
+void ATRegistryFlushToDisk();
 
 // Console-switch routing — the WASM page bar exposes hardware buttons
 // (START / SELECT / OPTION / RESET) that drive into the GTIA exactly
@@ -184,6 +187,25 @@ EM_JS(void, _altirra_wasm_sync_fs_out, (), {
 extern "C" EMSCRIPTEN_KEEPALIVE
 void ATWasmSyncFSOut() {
 	_altirra_wasm_sync_fs_out();
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE
+void ATWasmPersistSettings() {
+	if (!g_wasmSimReady)
+		return;
+
+	try {
+		ATSaveSettings((ATSettingsCategory)(
+			kATSettingsCategory_All & ~kATSettingsCategory_FullScreen));
+	} catch (...) {
+		fprintf(stderr, "[wasm] PersistSettings: ATSaveSettings failed\n");
+	}
+
+	try {
+		ATRegistryFlushToDisk();
+	} catch (...) {
+		fprintf(stderr, "[wasm] PersistSettings: registry flush failed\n");
+	}
 }
 
 // -----------------------------------------------------------------------
