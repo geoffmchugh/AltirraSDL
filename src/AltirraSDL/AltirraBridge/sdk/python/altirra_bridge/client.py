@@ -14,7 +14,7 @@ import os
 import secrets
 import socket
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 @dataclass
@@ -99,12 +99,15 @@ class AuthError(BridgeError):
 class RemoteError(BridgeError):
     """The server returned ``{"ok": false, "error": "..."}``.
 
-    The ``error`` attribute holds the server-side error string.
+    The ``error`` attribute holds the server-side error string and
+    ``response`` retains the complete structured response.
     """
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str,
+            response: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(message)
         self.error = message
+        self.response = response if response is not None else {}
 
 
 class AltirraBridge:
@@ -757,7 +760,7 @@ class AltirraBridge:
         return self._cmd_ok("DEVICE_LIST")
 
     def device_get(self, tag: str) -> dict:
-        """Return presence and settings for one device tag."""
+        """Return presence, settings, health, and diagnostics for one tag."""
         return self._cmd_ok(f"DEVICE_GET {tag}")
 
     def device_set(self, tag: str, enabled: bool = True, **settings) -> dict:
@@ -765,7 +768,9 @@ class AltirraBridge:
 
         Settings are encoded as ``key=value`` tokens, so values must not
         contain whitespace. Common quick tags include ``vbxe``, ``covox``,
-        ``soundboard``, ``rapidus``, and ``slightsid``.
+        ``soundboard``, ``rapidus``, and ``slightsid``. Descriptor load or
+        compilation errors for custom devices raise :class:`RemoteError`;
+        the exception's ``response`` retains device diagnostics.
         """
         state = "on" if enabled else "off"
         opts = []
@@ -1100,7 +1105,7 @@ class AltirraBridge:
     def _cmd_ok(self, command: str) -> dict:
         resp = self._send_command(command)
         if not resp.get("ok"):
-            raise RemoteError(resp.get("error", "remote error"))
+            raise RemoteError(resp.get("error", "remote error"), resp)
         return resp
 
     def _send_command(self, command: str) -> dict:

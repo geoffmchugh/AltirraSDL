@@ -25,6 +25,7 @@
 #include "ui_main.h"
 #include "ui_devconfig.h"
 #include "logging.h"
+#include "uicommondialogs.h"
 
 // =========================================================================
 // Helpers
@@ -313,8 +314,13 @@ void ATUIRenderDeviceConfig(ATDeviceManager *devMgr) {
 				if (g_devCfg.pDev && devMgr) {
 					try {
 						devMgr->ReconfigureDevice(*g_devCfg.pDev, g_devCfg.props);
+					} catch (const MyError& e) {
+						LOG_ERROR("UI", "Failed to reconfigure device: %s", e.c_str());
+						ATUIShowError2(nullptr, e.wc_str(), L"Unable to reconfigure device");
 					} catch (...) {
 						LOG_ERROR("UI", "Failed to reconfigure device");
+						ATUIShowError2(nullptr, L"An unknown error occurred.",
+							L"Unable to reconfigure device");
 					}
 					g_devCfg.Reset();
 				} else if (s_pendingAddMgr) {
@@ -344,8 +350,11 @@ void ATUIRenderDeviceConfig(ATDeviceManager *devMgr) {
 						}
 					} catch (const MyError& e) {
 						LOG_ERROR("UI", "Failed to add device: %s: %s", tag.c_str(), e.c_str());
+						ATUIShowError2(nullptr, e.wc_str(), L"Unable to add device");
 					} catch (...) {
 						LOG_ERROR("UI", "Failed to add device: %s", tag.c_str());
+						ATUIShowError2(nullptr, L"An unknown error occurred.",
+							L"Unable to add device");
 					}
 					g_devCfg.Reset();
 				}

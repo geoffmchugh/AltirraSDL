@@ -261,6 +261,7 @@ void RenderDevicesCategory(ATSimulator &sim) {
 		VDStringA tag;
 		VDStringA configTag;
 		VDStringA blurb;
+		vdvector<VDStringA> errors;
 		IATDevice *pDev;
 		ATDeviceFirmwareStatus fwStatus;
 		bool hasFwStatus;
@@ -292,6 +293,10 @@ void RenderDevicesCategory(ATSimulator &sim) {
 			dev->GetSettingsBlurb(blurbW);
 			if (!blurbW.empty())
 				entry.blurb = VDTextWToU8(blurbW);
+
+			VDStringW errorW;
+			for (uint32 i = 0; dev->GetErrorStatus(i, errorW); ++i)
+				entry.errors.push_back(VDTextWToU8(errorW));
 
 			IATDeviceFirmware *fwIface = vdpoly_cast<IATDeviceFirmware *>(dev);
 			if (fwIface) {
@@ -403,11 +408,23 @@ void RenderDevicesCategory(ATSimulator &sim) {
 					ImGui::EndPopup();
 				}
 
+				// Windows renders device diagnostics as error child nodes in
+				// this tree. Keep them attached to the owning device here too.
+				for (const VDStringA& error : dev.errors) {
+					ImGui::Indent(16.0f);
+					ImGui::PushStyleColor(ImGuiCol_Text, ATUIColorDangerText());
+					ImGui::TextWrapped("%s", error.c_str());
+					ImGui::PopStyleColor();
+					ImGui::Unindent(16.0f);
+				}
+
 				if (dev.depth > 0)
 					ImGui::Unindent(dev.depth * 16.0f);
 
 				ImGui::TableNextColumn();
-				if (dev.hasFwStatus) {
+				if (!dev.errors.empty()) {
+					ImGui::TextColored(ATUIColorDangerText(), "Error");
+				} else if (dev.hasFwStatus) {
 					switch (dev.fwStatus) {
 						case ATDeviceFirmwareStatus::OK:
 							ImGui::TextColored(ATUIColorSuccessText(), "OK");

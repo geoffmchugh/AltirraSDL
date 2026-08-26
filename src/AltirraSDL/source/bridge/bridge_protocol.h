@@ -42,8 +42,10 @@ std::string JsonOk();
 std::string JsonOk(const std::string& extraPayload);
 
 // Build an error response. msg is the human-readable error string;
-// it is JSON-escaped automatically. The trailing newline is included.
+// it is JSON-escaped automatically. The optional extra payload follows the
+// same object-body convention as JsonOk(). The trailing newline is included.
 std::string JsonError(const std::string& msg);
+std::string JsonError(const std::string& msg, const std::string& extraPayload);
 
 // Tokenise a command line at whitespace. Empty tokens are dropped.
 // Quoted-string tokens are NOT supported in v1 — Phase 1 commands take

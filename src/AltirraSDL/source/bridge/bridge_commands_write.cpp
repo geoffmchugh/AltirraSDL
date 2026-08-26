@@ -43,6 +43,7 @@
 #include "constants.h"       // ATHardwareMode, ATMemoryMode enums
 #include "debugger.h"        // ATGetDebugger() — break-on-EXE-run
 #include "devicemanager.h"
+#include "customdevice.h"
 
 #include "bridge_commands_debug2.h"  // BridgeSymClearAllInternal, BridgeProfileResetInternal, BridgeVerifierResetInternal
 
@@ -378,6 +379,30 @@ std::string BuildPropertySetJson(const ATPropertySet& pset) {
 	return out;
 }
 
+std::vector<std::string> GetDeviceErrors(IATDevice& dev) {
+	std::vector<std::string> errors;
+	VDStringW error;
+
+	for (uint32 i = 0; dev.GetErrorStatus(i, error); ++i)
+		errors.emplace_back(WideToU8(error.c_str()));
+
+	return errors;
+}
+
+void AddDeviceErrors(std::string& payload, IATDevice& dev) {
+	const std::vector<std::string> errors = GetDeviceErrors(dev);
+
+	AddBool(payload, "healthy", errors.empty());
+	payload += "\"diagnostics\":[";
+	for (const std::string& error : errors) {
+		payload += '"';
+		payload += JsonEscape(error);
+		payload += "\",";
+	}
+	StripTrailingComma(payload);
+	payload += "],";
+}
+
 std::string BuildDevicePayload(ATSimulator& sim, const std::string& tag, bool reset) {
 	ATDeviceManager *dm = sim.GetDeviceManager();
 	std::string payload;
@@ -397,6 +422,11 @@ std::string BuildDevicePayload(ATSimulator& sim, const std::string& tag, bool re
 			payload += "\"settings\":";
 			payload += BuildPropertySetJson(settings);
 			payload += ',';
+			AddDeviceErrors(payload, *dev);
+			if (tag == "custom") {
+				const auto& customDev = static_cast<const ATDeviceCustom&>(*dev);
+				AddBool(payload, "config_loaded", customDev.GetConfigError() == nullptr);
+			}
 		}
 	}
 
@@ -546,6 +576,20 @@ std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool e
 	if (changed && resetAfter) {
 		ColdResetPreservingPause(sim);
 		reset = true;
+	}
+
+	if (enable && tag == "custom") {
+		IATDevice *dev = dm->GetDeviceByTag(tag.c_str());
+		if (dev) {
+			const auto& customDev = static_cast<const ATDeviceCustom&>(*dev);
+			if (const wchar_t *error = customDev.GetConfigError()) {
+				const std::string errorU8 = WideToU8(error);
+				return JsonError(
+					"DEVICE_SET: unable to load custom device '" + rawTag
+						+ "': " + errorU8,
+					BuildDevicePayload(sim, tag, reset));
+			}
+		}
 	}
 
 	return JsonOk(BuildDevicePayload(sim, tag, reset));

@@ -206,6 +206,10 @@ a.device_clear()
 
 Wire form is token-based: `DEVICE_SET vbxe on version=126 base=d600`.
 Device option values must not contain spaces.
+`DEVICE_GET` reports `healthy` and a `diagnostics` array for installed
+devices. Custom-device descriptor load or compilation failures make
+`DEVICE_SET` fail while retaining the device for hot reload; the error response
+includes the same device payload and sets `config_loaded` to `false`.
 
 ## Rendering
 

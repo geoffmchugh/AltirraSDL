@@ -57,6 +57,18 @@ std::string JsonError(const std::string& msg) {
 	return out;
 }
 
+std::string JsonError(const std::string& msg, const std::string& extraPayload) {
+	if (extraPayload.empty())
+		return JsonError(msg);
+
+	std::string out = "{\"ok\":false,\"error\":\"";
+	out += JsonEscape(msg);
+	out += "\",";
+	out += extraPayload;
+	out += "}\n";
+	return out;
+}
+
 std::vector<std::string> TokenizeCommand(const std::string& line) {
 	std::vector<std::string> tokens;
 	std::string cur;

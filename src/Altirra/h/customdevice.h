@@ -92,6 +92,9 @@ public:
 	void GetSettingsBlurb(VDStringW& buf) override;
 	void GetSettings(ATPropertySet& settings) override;
 	bool SetSettings(const ATPropertySet& settings) override;
+	const wchar_t *GetConfigError() const {
+		return mLastError.empty() ? nullptr : mLastError.c_str();
+	}
 
 	void Init() override;
 	void Shutdown() override;

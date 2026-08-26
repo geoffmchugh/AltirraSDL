@@ -791,11 +791,15 @@ List installed top-level devices and bridge quick-add device tags.
 #### `DEVICE_GET tag`
 
 Query a device by tag. `settings` is an object containing the device's
-current `ATPropertySet` values when the device is present.
+current `ATPropertySet` values when the device is present. `healthy` reports
+whether the device currently has any diagnostics; `diagnostics` contains the
+human-readable messages. Custom devices also report `config_loaded`, which is
+independent of runtime diagnostics such as a disconnected network endpoint.
 
 ```json
 {"ok":true,"tag":"vbxe","known":true,"present":true,"reset":false,
- "settings":{"version":126,"alt_page":true}}
+ "settings":{"version":126,"alt_page":true},"healthy":true,
+ "diagnostics":[]}
 ```
 
 #### `DEVICE_SET tag on|off [key=value...]`
@@ -818,7 +822,12 @@ DEVICE_SET rapidus off
 
 Option tokens are whitespace-separated `key=value` pairs; values cannot
 contain spaces. Successful device changes cold-reset the machine while
-preserving pause state and report `"reset":true`.
+preserving pause state and report `"reset":true`. If the device reports a
+descriptor load or compilation error after it is added or reconfigured, the
+response has `"ok":false` and includes the device payload and its
+`diagnostics`. The device remains present so that hot reload and subsequent
+reconfiguration can recover it without first removing it. Runtime diagnostics
+do not fail `DEVICE_SET`; inspect `healthy` and `diagnostics` to detect them.
 
 #### `DEVICE_REMOVE tag` / `DEVICE_CLEAR`
 
