@@ -72,7 +72,7 @@ jobs:
             gcc-12 g++-12 \
             libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
-            libxi-dev libxfixes-dev libxss-dev libxkbcommon-dev \
+            libxi-dev libxfixes-dev libxtst-dev libxss-dev libxkbcommon-dev \
             libwayland-dev wayland-protocols libdecor-0-dev \
             libasound2-dev libpulse-dev libjack-jackd2-dev libpipewire-0.3-dev \
             libdbus-1-dev libudev-dev libibus-1.0-dev \
@@ -84,8 +84,10 @@ jobs:
           # wheel instead of adding a second external APT repo.
           # --only-binary avoids a slow source build if a wheel is missing
           # for either x86_64 or aarch64.
+          # SDL 3.4.14 still relies on pre-CMP0219 macro escaping. Keep
+          # CMake below 4.4 until SDL updates that feature probe.
           python3 -m pip install --user --disable-pip-version-check \
-            --only-binary=:all: 'cmake>=3.24,<5'
+            --only-binary=:all: 'cmake>=3.24,<4.4'
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
