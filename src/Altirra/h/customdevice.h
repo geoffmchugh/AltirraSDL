@@ -85,6 +85,7 @@ class ATDeviceCustom final
 
 public:
 	ATDeviceCustom();
+	~ATDeviceCustom();
 
 	void *AsInterface(uint32 iid) override;
 

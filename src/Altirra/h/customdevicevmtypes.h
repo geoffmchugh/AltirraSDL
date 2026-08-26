@@ -298,6 +298,7 @@ public:
 struct ATDeviceCustomControllerPort final : public ATVMObject {
 public:
 	static const ATVMObjectClass kVMObjectClass;
+	~ATDeviceCustomControllerPort();
 
 	vdrefptr<IATDeviceControllerPort> mpControllerPort;
 
@@ -422,6 +423,7 @@ public:
 	static const ATVMObjectClass kVMObjectClass;
 
 	ATDeviceCustomSound(ATDeviceCustom& parent);
+	~ATDeviceCustomSound();
 
 	void SetSoundData(vdspan<const sint16> data, float samplingRate);
 

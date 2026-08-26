@@ -23,7 +23,6 @@
 #include <vd2/Kasumi/pixmapops.h>
 #include <vd2/Kasumi/pixmaputils.h>
 #include <at/atcore/asyncdispatcher.h>
-#include <at/atcore/audiomixer.h>	// IATAudioSoundGroup / IATAudioSampleHandle full type required for vdrefptr<>::~vdrefptr instantiation in ATDeviceCustomSound (customdevicevmtypes.h); Android clang is stricter than Linux GCC about needing the complete type at member dtor instantiation
 #include <at/atcore/consoleoutput.h>
 #include <at/atcore/deviceport.h>
 #include <at/atcore/devicevideo.h>
@@ -149,6 +148,8 @@ ATDeviceCustom::ATDeviceCustom()
 		AbortRawSend(thread);
 	};
 }
+
+ATDeviceCustom::~ATDeviceCustom() = default;
 
 void *ATDeviceCustom::AsInterface(uint32 iid) {
 	switch(iid) {
@@ -3168,4 +3169,3 @@ void ATDeviceCustom::TryReconnectChildDevices() {
 		}
 	}
 }
-

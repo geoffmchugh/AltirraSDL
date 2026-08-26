@@ -1037,15 +1037,18 @@ shadow plus the collision read-side.
 
 Decoded POKEY per-channel audio state, including AUDCTL flag
 decoding (16-bit channel pairs, fast 1.79 MHz clock per channel,
-high-pass routes, base clock). Each channel also reports the effective
-POKEY timer period in machine cycles and the timer-derived waveform
-frequency in Hz. `freq_hz` is `null` when the channel has no waveform
-output; in 16-bit joined modes, the combined frequency is reported on
-channel 2 or 4.
+high-pass routes, base clock) and the SKCTL two-tone flag. Each channel
+also reports the effective POKEY timer period in machine cycles and the
+timer-derived waveform frequency in Hz. The period includes the two-cycle
+resynchronization delay for fast channel 1 and fast joined channels 1+2
+when two-tone mode is enabled. `freq_hz` is `null` when the channel has no
+waveform output; in 16-bit joined modes, the combined frequency is reported
+on channel 2 or 4.
 
 ```json
-{"ok":true,"audctl":"$28",
- "nine_bit_poly":false,"join_1_2":false,"join_3_4":false,
+{"ok":true,"audctl":"$28","skctl":"$03",
+ "nine_bit_poly":false,"two_tone":false,
+ "join_1_2":false,"join_3_4":false,
  "highpass_1_3":false,"highpass_2_4":false,"base_15khz":false,
  "channels":[
    {"channel":1,"audf":"$00","audc":"$00","volume":0,

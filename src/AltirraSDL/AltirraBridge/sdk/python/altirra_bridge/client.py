@@ -940,9 +940,9 @@ class AltirraBridge:
         return self._cmd_ok("PMG")
 
     def audio_state(self) -> dict:
-        """Decoded POKEY per-channel state: ``audctl``, flags
-        (``nine_bit_poly``, ``join_1_2``, etc.), and a ``channels``
-        list of 4 dicts with ``audf``, ``audc``, ``volume``,
+        """Decoded POKEY per-channel state: ``audctl``, ``skctl``, flags
+        (``nine_bit_poly``, ``two_tone``, ``join_1_2``, etc.), and a
+        ``channels`` list of 4 dicts with ``audf``, ``audc``, ``volume``,
         ``distortion``, ``clock`` (``"64kHz"``/``"15kHz"``/``"1.79MHz"``),
         ``period_cycles``, and ``freq_hz``. ``freq_hz`` is ``None``
         when the channel has no waveform output.

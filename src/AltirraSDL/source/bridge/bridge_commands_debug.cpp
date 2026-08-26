@@ -6,6 +6,7 @@
 #include <stdafx.h>
 
 #include "bridge_commands_debug.h"
+#include "bridge_pokey_audio.h"
 #include "bridge_protocol.h"
 
 #include "simulator.h"
@@ -100,53 +101,6 @@ void SnapshotPokeyRegs(ATPokeyEmulator& pokey, uint8_t out[32]) {
 	ATPokeyRegisterState st {};
 	pokey.GetRegisterState(st);
 	std::memcpy(out, st.mReg, 32);
-}
-
-uint32_t GetPokeyTimerPeriodCycles(const uint8_t reg[32], uint8_t audctl, int ch) {
-	const bool base15k = (audctl & 0x01) != 0;
-	const bool fast1 = (audctl & 0x40) != 0;
-	const bool fast3 = (audctl & 0x20) != 0;
-	const bool join12 = (audctl & 0x10) != 0;
-	const bool join34 = (audctl & 0x08) != 0;
-	const bool fastTimer = ch == 0 ? fast1 : ch == 2 ? fast3 : false;
-	const bool hiLinkedTimer = ch == 1 ? join12 : ch == 3 ? join34 : false;
-	const bool loLinkedTimer = ch == 0 ? join12 : ch == 2 ? join34 : false;
-
-	if (hiLinkedTimer) {
-		const int loCh = ch & ~1;
-		const bool fastLinkedTimer = ch == 1 ? fast1 : fast3;
-		uint32_t period = ((uint32_t)reg[0x00 + ch * 2] << 8)
-			+ (uint32_t)reg[0x00 + loCh * 2] + 1;
-
-		if (fastLinkedTimer)
-			period += 6;
-		else if (base15k)
-			period *= 114;
-		else
-			period *= 28;
-
-		return period;
-	}
-
-	if (loLinkedTimer) {
-		if (fastTimer)
-			return 256;
-		else if (base15k)
-			return 256 * 114;
-		else
-			return 256 * 28;
-	}
-
-	uint32_t period = (uint32_t)reg[0x00 + ch * 2] + 1;
-
-	if (fastTimer)
-		period += 3;
-	else if (base15k)
-		period *= 114;
-	else
-		period *= 28;
-
-	return period;
 }
 
 }  // namespace
@@ -648,6 +602,7 @@ std::string CmdAudioState(ATSimulator& sim, const std::vector<std::string>& toke
 	SnapshotPokeyRegs(pokey, reg);
 
 	const uint8_t audctl = reg[0x08];
+	const uint8_t skctl  = reg[0x0f];
 	const bool nine_bit  = (audctl & 0x80) != 0;
 	const bool fast_ch1  = (audctl & 0x40) != 0;
 	const bool fast_ch3  = (audctl & 0x20) != 0;
@@ -656,6 +611,7 @@ std::string CmdAudioState(ATSimulator& sim, const std::vector<std::string>& toke
 	const bool hp_1_3    = (audctl & 0x04) != 0;
 	const bool hp_2_4    = (audctl & 0x02) != 0;
 	const bool base_15k  = (audctl & 0x01) != 0;
+	const bool two_tone  = (skctl & 0x08) != 0;
 	const double schedulerRate = sim.GetScheduler()
 		? sim.GetScheduler()->GetRate().asDouble()
 		: 1789772.5;
@@ -668,7 +624,8 @@ std::string CmdAudioState(ATSimulator& sim, const std::vector<std::string>& toke
 		const uint8_t distortion = (uint8_t)((audc >> 5) & 0x07);
 		const bool    volume_only = (audc & 0x10) != 0;
 		const uint8_t volume     = (uint8_t)(audc & 0x0f);
-		const uint32_t periodCycles = GetPokeyTimerPeriodCycles(reg, audctl, ch);
+		const uint32_t periodCycles = GetPokeyTimerPeriodCycles(
+			reg, audctl, skctl, ch);
 		const bool hasWaveform = !volume_only && volume != 0;
 
 		// Clock source for this channel
@@ -699,7 +656,9 @@ std::string CmdAudioState(ATSimulator& sim, const std::vector<std::string>& toke
 
 	std::string payload;
 	AddField(payload, "audctl",    Hex8(audctl));
+	AddField(payload, "skctl",     Hex8(skctl));
 	AddBool (payload, "nine_bit_poly", nine_bit);
+	AddBool (payload, "two_tone",  two_tone);
 	AddBool (payload, "join_1_2",  join_12);
 	AddBool (payload, "join_3_4",  join_34);
 	AddBool (payload, "highpass_1_3", hp_1_3);
