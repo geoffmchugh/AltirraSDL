@@ -4,12 +4,11 @@ name: Linux build
 # so the glibc floor is pinned to 2.35 (compatible with Debian 12, Ubuntu
 # 22.04+, RHEL 9+, recent Fedora/Arch). SDL3 is linked statically into the
 # binary by default (ALTIRRA_STATIC_SDL3=ON), so the AppImage contains
-# just AltirraSDL + optional librashader.so plus the handful of libraries
+# just AltirraSDL plus the handful of libraries
 # linuxdeploy picks up via ldd (libc / libstdc++ / libgcc_s / libm).
 # X11/Wayland/PulseAudio/ALSA/libdecor are NOT bundled — SDL3 dlopens
 # them at runtime, so they must exist on the target system; this is
-# always true on a glibc-2.35+ desktop. librashader is built from source
-# via Rust.
+# always true on a glibc-2.35+ desktop.
 #
 # Two architectures are built in parallel via a matrix:
 #   - x86_64  on ubuntu-latest         (GitHub's standard x86_64 runner)
@@ -115,13 +114,6 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust (for librashader)
-        shell: bash
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --default-toolchain stable --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -130,12 +122,6 @@ jobs:
       # a repo owned by a different uid than the current process.
       - name: Mark workspace as safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Cache librashader source + target
-        uses: actions/cache@v4
-        with:
-          path: build/_deps/librashader-src
-          key: librashader-v0.10.1-${{ runner.os }}-${{ runner.arch }}
 
       - name: Build, package, and produce AppImage
         shell: bash
@@ -165,12 +151,6 @@ jobs:
           else
             echo "  libSDL3 is statically linked into AltirraSDL (expected)"
           fi
-          if [ -f squashfs-root/usr/bin/librashader.so ]; then
-            echo "  librashader.so bundled OK"
-          else
-            echo "  WARNING: librashader.so not bundled"
-          fi
-
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:

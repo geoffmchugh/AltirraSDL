@@ -55,7 +55,7 @@ int g_insetRight  = 0;
 float CurrentScale() {
 	ImGuiIO &io = ImGui::GetIO();
 	float fs = io.Fonts->Fonts.Size > 0
-		? io.Fonts->Fonts[0]->FontSize
+		? io.Fonts->Fonts[0]->LegacySize
 		: 13.0f;
 	float s = (fs / 16.0f) * io.FontGlobalScale;
 	if (s < 0.5f) s = 0.5f;

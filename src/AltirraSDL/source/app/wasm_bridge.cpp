@@ -1591,7 +1591,7 @@ void ATWasmToggleVideoStandard() {
 
 // JS-side bar button (CRT On/Off).  Returns 0=None, 1=Basic, 2=Preset.
 // The page-bar button cares only about None ↔ Basic (Preset is for
-// librashader, which the WASM build doesn't ship).
+// external shader runtimes, which the WASM build doesn't ship).
 extern "C" EMSCRIPTEN_KEEPALIVE
 int ATWasmGetCRTMode() {
 	return (int)g_uiState.screenEffectsMode;
@@ -1623,14 +1623,9 @@ extern void SaveMobileConfig(const ATMobileUIState &mobileState);
 // ATArtifactingParams::GetDefault and ATGTIAEmulator::GetDefaultScreen
 // MaskParams.
 //
-// Any active librashader preset is cleared first so Basic actually
-// drives the built-in pipeline.  The mobile config is persisted so the
-// choice survives a page reload.
+// The mobile config is persisted so the choice survives a page reload.
 extern "C" EMSCRIPTEN_KEEPALIVE
 void ATWasmToggleCRT() {
-	IDisplayBackend *be = ATUIGetDisplayBackend();
-	ATUIShaderPresetsClear(be);
-
 	const ATUIState::ScreenEffectsMode prev = g_uiState.screenEffectsMode;
 	const bool wasOn = (prev != ATUIState::kSFXMode_None);
 	g_mobileState.performancePreset = wasOn ? 0 /* Efficient */
@@ -1673,7 +1668,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE
 void ATWasmSetCRTEnabled(int on) {
 	// Reuse the page-bar toggle's logic by short-circuiting when the
 	// requested state already matches.  ATWasmToggleCRT clears any
-	// active librashader preset, applies Quality (preset 2) on the
+	// active screen effects mode, applies Quality (preset 2) on the
 	// off→on edge and Efficient (preset 0) on on→off, and persists
 	// the choice via SaveMobileConfig.
 	const bool isOn = (g_uiState.screenEffectsMode != ATUIState::kSFXMode_None);

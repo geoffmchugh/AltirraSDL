@@ -79,7 +79,7 @@ void GLUploadXRGB8888(int w, int h, const void *data, int pitch = 0);
 // toggles GL_FRAMEBUFFER_SRGB; on GLES 3.0 this is a no-op because the
 // equivalent is controlled per-framebuffer-attachment by the attached
 // texture's internal format (e.g. GL_SRGB8_ALPHA8).  Callers use this
-// to undo librashader side-effects before ImGui rendering.
+// to restore a known state before ImGui rendering.
 void GLSetFramebufferSRGB(bool enable);
 
 // Create an FBO with a single color attachment texture.

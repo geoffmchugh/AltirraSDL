@@ -52,11 +52,9 @@ target_sources(AltirraSDL PRIVATE
     source/app/ui_file_dialog_sdl3.cpp
 
     # --- display/ : SDL display + GL backends + shaders ---
-    # Note: the GL backend sources (display_backend_gl33.cpp, gl_funcs.cpp,
-    # gl_helpers.cpp) plus the librashader integration are added below —
-    # the GL backend compiles on every platform; librashader is excluded
-    # on WASM only.
     source/display/display_sdl3.cpp
+    source/display/display_backend.cpp
+    source/display/display_backend_sdlgpu.cpp
     source/display/display_backend_sdl.cpp
 
     # --- input/ : SDL input, joystick, touch ---
@@ -144,7 +142,6 @@ target_sources(AltirraSDL PRIVATE
     source/ui/dialogs/ui_lightpen.cpp
     source/ui/dialogs/ui_palette_solver.cpp
     source/ui/dialogs/ui_screenfx.cpp
-    source/ui/dialogs/ui_shader_presets.cpp
     source/ui/dialogs/ui_display.cpp
     source/ui/dialogs/ui_hud_customize.cpp
     source/ui/dialogs/ui_keyboard_customize.cpp
@@ -272,14 +269,11 @@ target_sources(AltirraSDL PRIVATE
 # (Emscripten links GL entry points through its WebGL2 binding when the
 # build is configured with -sUSE_WEBGL2=1 -sFULL_ES3=1).  Built-in screen
 # effects (scanlines, bloom, distortion, mask, vignette) therefore work
-# in the browser too; on WASM the librashader integration compiles but
-# self-disables at runtime because there is no WebAssembly librashader
-# shared library to dlopen.
+# in the browser too.
 target_sources(AltirraSDL PRIVATE
     source/display/display_backend_gl33.cpp
     source/display/gl_funcs.cpp
     source/display/gl_helpers.cpp
-    source/display/display_librashader.cpp
 )
 if(ALTIRRA_WASM)
     # WASM-only bridge: JS/C glue for user uploads, library refresh, and
@@ -1186,6 +1180,7 @@ if(APPLE)
 
     # macOS Objective-C++ files — compiled with Clang when GCC is the main
     # compiler; see altirra_add_objcxx_source() defined earlier in this file.
+    altirra_add_objcxx_source(source/os/macos_autorelease_pool.mm)
     altirra_add_objcxx_source(source/ui/menus/macos_menubar.mm)
     altirra_add_objcxx_source(source/os/midimate_coremidi.mm)
 endif()
@@ -1554,46 +1549,8 @@ if(NOT ALTIRRA_SKIP_SDL3_IMAGE AND TARGET SDL3_image::SDL3_image-shared)
     endif()
 endif()
 
-# Bundle librashader shared library if present next to the executable.
-# The build.sh --librashader step places it there; we just copy it into
-# the package directory.  Use a generator expression for the exe directory
-# so it resolves correctly on all generators (Makefiles vs MSVC).
-if(ENABLE_LIBRASHADER)
-    if(WIN32)
-        set(_LIBRA_GLOB "librashader.dll")
-        set(_LIBRA_DST "${ALTIRRA_PKG_DIR}/")
-    elseif(APPLE)
-        set(_LIBRA_GLOB "librashader*.dylib")
-        # Inside the .app bundle so @executable_path resolves at runtime
-        # and the dylib is covered by the ad-hoc codesign step below.
-        set(_LIBRA_DST "${ALTIRRA_PKG_DIR}/AltirraSDL.app/Contents/MacOS/")
-    else()
-        # Match librashader.so, librashader.so.1, librashader.so.2, etc.
-        # The loader in vendor/librashader/librashader_ld.h tries all of
-        # these in order; we need to ship whichever one is present.
-        set(_LIBRA_GLOB "librashader.so*")
-        set(_LIBRA_DST "${ALTIRRA_PKG_DIR}/")
-    endif()
-
-    # Look next to the executable (works for both single-config and
-    # multi-config generators like MSVC which add Release/ etc.).  On
-    # macOS this resolves to AltirraSDL.app/Contents/MacOS/, which is
-    # also where librashader.sh now writes the dylib.
-    set(_LIBRA_GLOB_PATH "$<TARGET_FILE_DIR:AltirraSDL>/${_LIBRA_GLOB}")
-
-    # Use a script-mode cmake snippet (copy_if_exists.cmake) so
-    # packaging never fails just because librashader wasn't built.
-    add_custom_command(TARGET package_altirra POST_BUILD
-        COMMAND ${CMAKE_COMMAND}
-            -DSRC_GLOB=${_LIBRA_GLOB_PATH}
-            -DDST=${_LIBRA_DST}
-            -P "${CMAKE_SOURCE_DIR}/cmake/copy_if_exists.cmake"
-        COMMENT "Bundling ${_LIBRA_GLOB} into package (if present)"
-    )
-endif()
-
 # macOS: ad-hoc codesign the packaged .app bundle as the FINAL POST_BUILD
-# step, so any dylibs (SDL3, librashader) added by earlier POST_BUILD
+# step, so any SDL dylibs added by earlier POST_BUILD
 # commands are included in the signature.  macOS 14+ refuses to grant
 # GameController access to an unsigned bundle even with the
 # NSGameControllerUsageDescription key present; ad-hoc signing ("-")

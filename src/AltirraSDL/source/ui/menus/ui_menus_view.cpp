@@ -201,62 +201,59 @@ void ATUIRenderViewMenu(ATSimulator &sim, ATUIState &state, SDL_Window *window, 
 	if (ImGui::MenuItem("Adjust Colors..."))
 		state.showAdjustColors = true;
 
-	// Screen Effects submenu — combines built-in effects (Basic) and
-	// librashader presets into a unified mode selector.  Hidden on
-	// backends without GPU shader effects (WASM's SDL_Renderer, the
-	// SDL_Renderer fallback when GL context creation fails on desktop):
-	// none of the entries do anything visible there.
+#ifndef __EMSCRIPTEN__
+	// SDL3 extension: renderer choice has no native Windows equivalent.
+	if (ImGui::BeginMenu("Renderer")) {
+		const ATDisplayBackendPreference preference =
+			ATDisplayBackendPreferenceLoad();
+		if (ImGui::MenuItem("SDL_GPU (Recommended)", nullptr,
+			preference == ATDisplayBackendPreference::SDLGPU))
+		{
+			ATDisplayBackendPreferenceSave(
+				ATDisplayBackendPreference::SDLGPU);
+		}
+		if (ImGui::MenuItem("OpenGL", nullptr,
+			preference == ATDisplayBackendPreference::OpenGL))
+		{
+			ATDisplayBackendPreferenceSave(
+				ATDisplayBackendPreference::OpenGL);
+		}
+		if (ImGui::MenuItem("SDL_Renderer (Compatibility)", nullptr,
+			preference == ATDisplayBackendPreference::SDLRenderer))
+		{
+			ATDisplayBackendPreferenceSave(
+				ATDisplayBackendPreference::SDLRenderer);
+		}
+
+		ImGui::Separator();
+		IDisplayBackend *activeBackend = ATUIGetDisplayBackend();
+		char activeLabel[64];
+		snprintf(activeLabel, sizeof activeLabel, "Active: %s",
+			activeBackend
+				? ATDisplayBackendTypeName(activeBackend->GetType())
+				: "Unknown");
+		ImGui::MenuItem(activeLabel, nullptr, false, false);
+		ImGui::MenuItem("Changes apply after restart", nullptr, false, false);
+		ImGui::EndMenu();
+	}
+#endif
+
+	// Screen Effects submenu. Hidden on the SDL_Renderer compatibility
+	// backend because it cannot run the GPU post-processing pipeline.
 	IDisplayBackend *sfxBE = ATUIGetDisplayBackend();
 	if (sfxBE && sfxBE->SupportsScreenFX() && ImGui::BeginMenu("Screen Effects")) {
-		IDisplayBackend *be = sfxBE;
-		bool shaderAvail = be->SupportsExternalShaders();
-		bool hasPreset = be->HasShaderPreset();
-
-		// Sync mode from actual backend state
-		if (hasPreset)
-			state.screenEffectsMode = ATUIState::kSFXMode_Preset;
-
 		bool isNone = (state.screenEffectsMode == ATUIState::kSFXMode_None);
 		bool isBasic = (state.screenEffectsMode == ATUIState::kSFXMode_Basic);
-		bool isPreset = (state.screenEffectsMode == ATUIState::kSFXMode_Preset);
 
-		// (None) — disable all effects
-		if (ImGui::MenuItem("(None)", nullptr, isNone)) {
-			ATUIShaderPresetsClear(be);
+		if (ImGui::MenuItem("(None)", nullptr, isNone))
 			state.screenEffectsMode = ATUIState::kSFXMode_None;
-		}
 
-		// Basic — built-in Altirra effects (scanlines, bloom, distortion, mask)
-		if (ImGui::MenuItem("Basic", nullptr, isBasic)) {
-			ATUIShaderPresetsClear(be);
+		if (ImGui::MenuItem("Basic", nullptr, isBasic))
 			state.screenEffectsMode = ATUIState::kSFXMode_Basic;
-		}
 
 		ImGui::Separator();
-
-		// Preset submenu — shader directory tree + Browse
-		ATUIRenderShaderPresetMenu(backend);
-		if (!shaderAvail && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("librashader not found.\nUse Shader Setup or rebuild with --librashader.");
-
-		ImGui::Separator();
-
-		// Shader Parameters — context-sensitive
-		{
-			bool canShowParams = !isNone;
-			if (ImGui::MenuItem("Shader Parameters...", nullptr, false, canShowParams)) {
-				if (isPreset)
-					state.showShaderParams = true;
-				else
-					state.showScreenEffects = true;
-			}
-			if (!canShowParams && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
-				ImGui::SetTooltip("Select Basic or a Preset first.");
-		}
-
-		// Shader Setup — always accessible
-		if (ImGui::MenuItem("Shader Setup..."))
-			state.showShaderSetup = true;
+		if (ImGui::MenuItem("Adjust Screen Effects...", nullptr, false, !isNone))
+			state.showScreenEffects = true;
 
 		ImGui::EndMenu();
 	}

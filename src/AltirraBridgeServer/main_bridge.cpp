@@ -3,7 +3,7 @@
 // Minimal main loop that runs the Altirra emulator and serves the
 // bridge protocol over a local socket. Speaks the same protocol as
 // `AltirraSDL --bridge`, with no SDL3 main window, no Dear ImGui, no
-// librashader, no display backend, no input layer, no UI tree.
+// display backend, input layer, or UI tree.
 //
 // Linker dependencies (see CMakeLists.txt):
 //   ATCPU, ATEmulation, ATDevices, ATIO, ATAudio, ATNetwork,

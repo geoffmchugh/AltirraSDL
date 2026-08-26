@@ -1259,8 +1259,7 @@ bool ATUIInit(SDL_Window *window, IDisplayBackend *backend) {
 	// glyphs on HiDPI, then scaled back to logical coordinates so they
 	// appear at the intended point size.
 	io.FontGlobalScale = 1.0f / contentScale;
-	const bool usingGL = (backend->GetType() == DisplayBackendType::OpenGL);
-	ATUIFontsInit(contentScale, usingGL);
+	ATUIFontsInit(contentScale);
 
 	s_pDisplayBackend = backend;
 
@@ -1295,7 +1294,9 @@ bool ATUIInit(SDL_Window *window, IDisplayBackend *backend) {
 			LOG_ERROR("UI", "ImGui SDLRenderer3 init failed");
 			return false;
 		}
-		LOG_INFO("UI", "ImGui initialized (SDL_Renderer, docking enabled)");
+		LOG_INFO("UI", "ImGui initialized (%s, docking enabled)",
+			backend->GetType() == DisplayBackendType::SDLGPU
+				? "SDL_GPU renderer" : "SDL_Renderer");
 	}
 
 #ifndef __ANDROID__
@@ -1461,7 +1462,7 @@ static SDL_Surface *ReadFramebufferToSurface(IDisplayBackend *backend) {
 	if (!backend)
 		return nullptr;
 
-	if (backend->GetType() == DisplayBackendType::SDLRenderer) {
+	if (backend->GetType() != DisplayBackendType::OpenGL) {
 		return SDL_RenderReadPixels(backend->GetSDLRenderer(), nullptr);
 	}
 
@@ -1876,8 +1877,6 @@ static bool ATUIQuickBarSuppressedByDialog(const ATUIState& state) {
 		state.showRewind ||
 		state.showTapeEditor ||
 		state.showScreenEffects ||
-		state.showShaderParams ||
-		state.showShaderSetup ||
 		state.showCalibrate ||
 		state.showCustomizeHud ||
 		state.showVirtualKeyboard ||
@@ -2271,14 +2270,11 @@ void ATUIRenderFrame(ATSimulator &sim, VDVideoDisplaySDL3 &display,
 	if (state.showLightPen)         ATUIRenderLightPenDialog(sim, state);
 	if (state.showTapeEditor)       ATUIRenderTapeEditor(sim, state, window);
 	if (state.showScreenEffects)    ATUIRenderScreenEffects(sim, state);
-	if (state.showShaderParams)     ATUIRenderShaderParameters(state);
-	if (state.showShaderSetup)      ATUIRenderShaderSetupHelp(state);
 	if (state.showCalibrate)        ATUIRenderCalibrationDialog(state);
 	if (state.showCustomizeHud)     ATUIRenderCustomizeHudDialog(state);
 #ifdef ALTIRRA_NETPLAY_ENABLED
 	ATNetplayUI_RenderDesktop(sim, state, window);
 #endif
-	ATUIShaderPresetsPoll(backend);
 	ATUIRenderVideoRecordingDialog(window);
 
 	// Debugger dialogs (self-managed visibility)

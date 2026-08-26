@@ -2691,11 +2691,21 @@ static std::string DispatchCommand(std::string cmd, ATSimulator &sim, ATUIState 
 static void ProcessPendingActions() {
 	ImGuiIO &io = ImGui::GetIO();
 	bool mouseUsedThisFrame = false;
+	bool priorInteractionPending = false;
 
 	for (size_t i = 0; i < g_pendingActions.size(); ) {
 		PendingAction &action = g_pendingActions[i];
 
 		if (action.type == PendingActionType::WaitFrames) {
+			// A wait queued after an input action begins only after that action
+			// has completed. Mouse release and key-up events are injected from
+			// PostRender and are not consumed by ImGui until the next NewFrame;
+			// counting those delivery frames made wait_frames(3) return before
+			// release-driven widgets (checkboxes and buttons) activated.
+			if (priorInteractionPending) {
+				++i;
+				continue;
+			}
 			if (--action.framesRemaining <= 0) {
 				SendResponse(JsonOk());
 				g_pendingActions.erase(g_pendingActions.begin() + i);
@@ -2707,6 +2717,7 @@ static void ProcessPendingActions() {
 		}
 
 		if (action.type == PendingActionType::MouseMove) {
+			priorInteractionPending = true;
 			if (mouseUsedThisFrame) {
 				++i;
 				continue;
@@ -2721,6 +2732,7 @@ static void ProcessPendingActions() {
 		}
 
 		if (action.type == PendingActionType::KeyPress) {
+			priorInteractionPending = true;
 			switch (action.clickPhase) {
 				case 0:
 					if (action.ctrl) {
@@ -2773,6 +2785,7 @@ static void ProcessPendingActions() {
 		}
 
 		if (action.type == PendingActionType::Click) {
+			priorInteractionPending = true;
 			// Only one click action may inject mouse events per frame to
 			// avoid conflicting position/button state.
 			if (mouseUsedThisFrame) {

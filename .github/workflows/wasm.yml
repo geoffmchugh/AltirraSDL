@@ -13,10 +13,10 @@ name: WebAssembly build
 #     site works on any plain static host (GitHub Pages, Netlify, S3
 #     bucket, self-hosted Nginx) without COOP/COEP headers.
 #   - Netplay uses the browser WSS transport; raw UDP, LAN discovery, and
-#     native NAT traversal are excluded. AltirraBridge and librashader are
-#     forced OFF because they require OS sockets or native shared libraries.
+#     native NAT traversal are excluded. AltirraBridge is forced OFF because
+#     it requires native OS sockets.
 #   - Rendering uses the direct GLES3 display backend over WebGL2, including
-#     built-in screen effects. External librashader presets remain unavailable.
+#     built-in screen effects.
 #   - Persistence is per-origin via IDBFS (Emscripten's IndexedDB-backed
 #     filesystem).  User-uploaded games and firmware live under /persist
 #     in the virtual filesystem and survive page reloads.
@@ -83,7 +83,7 @@ jobs:
       # Configure-time caching of SDL3 / SDL3_image FetchContent sources
       # keeps re-runs fast on cache hits.
       # Cache the FetchContent source trees — SDL3, SDL3_image, ImGui,
-      # librashader headers, plus their configure-time intermediates.
+      # plus their configure-time intermediates.
       # Key on every top-level CMakeLists.txt so bumping a pinned tag
       # in any of them invalidates cleanly.  The cache is safe to share
       # across all WASM builds because the inputs pin toolchain + tags.

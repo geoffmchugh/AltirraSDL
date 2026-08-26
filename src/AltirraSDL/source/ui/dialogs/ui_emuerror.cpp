@@ -375,7 +375,7 @@ static void RenderEmuErrorDesktop(ATSimulator &sim) {
 static float GamingDP(float v) {
 	ImGuiIO &io = ImGui::GetIO();
 	float fs = io.Fonts->Fonts.Size > 0
-		? io.Fonts->Fonts[0]->FontSize : 13.0f;
+		? io.Fonts->Fonts[0]->LegacySize : 13.0f;
 	float scale = (fs / 16.0f) * io.FontGlobalScale;
 	if (scale < 0.5f) scale = 0.5f;
 	if (scale > 5.0f) scale = 5.0f;

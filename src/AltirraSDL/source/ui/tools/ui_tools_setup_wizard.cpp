@@ -721,7 +721,7 @@ static void LibFolderCallback(void *, const char * const *filelist, int) {
 // useful — the radio buttons toggle bloom/distortion/mask/vignette
 // which are all SupportsScreenFX()-gated.  When the active display
 // backend can't render them (WASM's SDL_Renderer, or the desktop
-// SDL_Renderer fallback after a failed GL context creation), the
+// SDL_Renderer fallback after GPU/OpenGL initialization failure), the
 // page becomes a no-op, so we skip it the same way Gaming Mode does.
 static bool Wiz_SkipScreenFXPage() {
 	if (ATUIIsGamingMode())
@@ -1305,20 +1305,14 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 
 			ImGui::TextWrapped(
 				"You can fine-tune individual effects later from View > "
-				"Adjust Screen Effects, and load external librashader "
-				"presets from View > Screen Effects."
+				"Screen Effects > Adjust Screen Effects."
 			);
 			ImGui::Spacing();
 			ImGui::Spacing();
 
-			IDisplayBackend *be = ATUIGetDisplayBackend();
-			if (be && be->HasShaderPreset())
-				state.screenEffectsMode = ATUIState::kSFXMode_Preset;
-
 			int sel = (state.screenEffectsMode == ATUIState::kSFXMode_None) ? 0 : 1;
 
 			if (ImGui::RadioButton("None", sel == 0)) {
-				ATUIShaderPresetsClear(be);
 				state.screenEffectsMode = ATUIState::kSFXMode_None;
 			}
 			ImGui::TextDisabled(
@@ -1326,19 +1320,10 @@ void ATUIRenderSetupWizard(ATSimulator &sim, ATUIState &state, SDL_Window *windo
 			ImGui::Spacing();
 
 			if (ImGui::RadioButton("Basic Shaders", sel == 1)) {
-				ATUIShaderPresetsClear(be);
 				state.screenEffectsMode = ATUIState::kSFXMode_Basic;
 			}
 			ImGui::TextDisabled(
 				"  Built-in scanlines, bloom, distortion, mask, vignette.");
-
-			if (state.screenEffectsMode == ATUIState::kSFXMode_Preset) {
-				ImGui::Spacing();
-				ImGui::TextWrapped(
-					"Note: a librashader preset is currently active. "
-					"Choosing None or Basic Shaders here will unload it."
-				);
-			}
 			break;
 		}
 

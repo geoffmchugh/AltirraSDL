@@ -31,6 +31,7 @@
 #include <at/atio/cartridgetypes.h>
 #include <at/atio/image.h>
 #include "disk_state.h"           // ATResolveDiskMount for RW persistence
+#include "display_backend.h"
 #include "mediamanager.h"
 #include "cassette.h"
 #include "cheatengine.h"
@@ -315,7 +316,7 @@ bool ATProcessCommandLineSDL3(int argc, char **argv) {
 		// ---- Help ----
 		if (MatchSwitch(sw, "help") || MatchSwitch(sw, "?")) {
 			consumed[i] = true;
-			LOG_INFO("CmdLine", "Usage: AltirraSDL [options] [image-file ...]\n\n" "Display:  --f  --ntsc --pal --secam --ntsc50 --pal60\n" "          --artifact <mode>  --vsync/--novsync\n" "Hardware: --hardware <mode>  --kernel <name>  --memsize <size>\n" "          --stereo/--nostereo  --basic/--nobasic\n" "Media:    --cart/--disk/--run/--runbas/--tape <file>\n" "          --bootro/--bootrw/--bootvrw/--bootvrwsafe\n" "Devices:  --adddevice/--setdevice/--removedevice <spec>\n" "          --cleardevices  --pclink <mode,path>  --hdpath <path>\n" "Online:   --join-session <id>  --join-code <code>\n" "          --host-session <title>\n" "Debugger: --debug  --debugcmd <cmd>  --autotest\n" "Other:    --type <text>  --rawkeys  --diskemu <mode>\n\n" "Use Help > Command-Line Help in the menu for full details.");
+			LOG_INFO("CmdLine", "Usage: AltirraSDL [options] [image-file ...]\n\n" "Display:  --f  --ntsc --pal --secam --ntsc50 --pal60\n" "          --artifact <mode>  --vsync/--novsync\n" "          --renderer <sdlgpu|opengl|sdlrenderer>\n" "Hardware: --hardware <mode>  --kernel <name>  --memsize <size>\n" "          --stereo/--nostereo  --basic/--nobasic\n" "Media:    --cart/--disk/--run/--runbas/--tape <file>\n" "          --bootro/--bootrw/--bootvrw/--bootvrwsafe\n" "Devices:  --adddevice/--setdevice/--removedevice <spec>\n" "          --cleardevices  --pclink <mode,path>  --hdpath <path>\n" "Online:   --join-session <id>  --join-code <code>\n" "          --host-session <title>\n" "Debugger: --debug  --debugcmd <cmd>  --autotest\n" "Other:    --type <text>  --rawkeys  --diskemu <mode>\n\n" "Use Help > Command-Line Help in the menu for full details.");
 			continue;
 		}
 
@@ -330,6 +331,17 @@ bool ATProcessCommandLineSDL3(int argc, char **argv) {
 		if (MatchSwitch(sw, "f")) {
 			consumed[i] = true;
 			ATSetFullscreen(true);
+			continue;
+		}
+
+		// ---- Display renderer ----
+		// Applied by main_sdl3.cpp before window creation; consume and validate
+		// it here so the regular pass does not report it as an unknown switch.
+		if ((val = ConsumeArg(argc, argv, i, consumed, "renderer")) != nullptr) {
+			ATDisplayBackendPreference parsed;
+			if (!ATDisplayBackendPreferenceParse(val, parsed))
+				LOG_INFO("CmdLine", "--renderer: expected sdlgpu, opengl, or "
+					"sdlrenderer; got '%s'", val);
 			continue;
 		}
 

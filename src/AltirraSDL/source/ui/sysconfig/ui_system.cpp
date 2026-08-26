@@ -188,7 +188,10 @@ void ATUIRenderSystemConfig(ATSimulator &sim, ATUIState &state) {
 		return;
 	}
 #endif
-	ImGui::SetNextWindowSize(ImVec2(640, 480), ImGuiCond_Appearing);
+	// The extra vertical room keeps the complete Computer/Outputs/
+	// Peripherals/Media portion of the Windows category tree visible at the
+	// default font size; lower Emulator pages remain naturally scrollable.
+	ImGui::SetNextWindowSize(ImVec2(640, 520), ImGuiCond_Appearing);
 	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 	if (!ImGui::Begin("Configure System", &state.showSystemConfig, ImGuiWindowFlags_NoSavedSettings)) {
 		ImGui::End();
@@ -210,7 +213,11 @@ void ATUIRenderSystemConfig(ATSimulator &sim, ATUIState &state) {
 		const TreeEntry& te = kTreeEntries[i];
 		if (te.indent == 0) {
 			// Category header (non-selectable)
-			ImGui::Spacing();
+			// A small group gap preserves the Windows tree hierarchy without
+			// consuming a full item-spacing row per heading. The larger gap used
+			// before ImGui 1.92 pushed the final Media page out of the initial
+			// 480px sidebar.
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 2.0f);
 			ImGui::TextDisabled("%s", te.label);
 		} else {
 			// Leaf item (selectable)

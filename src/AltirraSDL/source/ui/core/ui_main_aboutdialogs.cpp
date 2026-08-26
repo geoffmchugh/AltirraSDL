@@ -41,7 +41,9 @@ void ATUIRenderCommandLineHelpDialog(ATUIState &state) {
 				"  --ntsc / --pal / --secam / --ntsc50 / --pal60\n"
 				"                        Set video standard\n"
 				"  --artifact <mode>     Artifacting: none, ntsc, ntschi, pal, palhi\n"
-				"  --vsync / --novsync   Enable/disable VSync");
+				"  --vsync / --novsync   Enable/disable VSync\n"
+				"  --renderer <name>     Startup renderer: sdlgpu, opengl, or\n"
+				"                        sdlrenderer (current launch only)");
 		}
 
 		if (ImGui::CollapsingHeader("Hardware")) {

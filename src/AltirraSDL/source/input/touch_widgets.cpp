@@ -41,7 +41,7 @@ void UpdateContentScale() {
 	// ~13px and contentScale is effectively 13/16 ≈ 0.81 — that's
 	// fine for the widget sizes here since they still look clickable.
 	float fs = io.Fonts->Fonts.Size > 0
-		? io.Fonts->Fonts[0]->FontSize
+		? io.Fonts->Fonts[0]->LegacySize
 		: 13.0f;
 	s_contentScale = (fs / 16.0f) * io.FontGlobalScale;
 	if (s_contentScale < 0.5f) s_contentScale = 0.5f;
@@ -1053,7 +1053,7 @@ bool ATTouchButton(const char *label, const ImVec2 &sizeArg,
 	// every glyph and avoids a CalcTextSize() round-trip through ImGui's
 	// font stack.  The 8dp gap between icon and label matches Google's
 	// Material 3 button spec.
-	float iconSize = hasIcon ? iconFont->FontSize : 0.0f;
+	float iconSize = hasIcon ? iconFont->LegacySize : 0.0f;
 	float iconGap  = hasIcon ? dp(8.0f)           : 0.0f;
 	float iconUnit = hasIcon ? (iconSize + iconGap) : 0.0f;
 
@@ -1230,7 +1230,7 @@ bool ATTouchListItem(const char *title, const char *subtitle,
 	// title (Material 3 list-row spec).  Sized from the actual icon
 	// font height rather than a fixed slot, so a future change to
 	// kIconPointSize doesn't leave the title overlapping the glyph.
-	const float iconSize = hasIcon ? iconFont->FontSize : 0.0f;
+	const float iconSize = hasIcon ? iconFont->LegacySize : 0.0f;
 	const float iconGap  = hasIcon ? dp(16.0f)          : 0.0f;
 	const float iconSlot = hasIcon ? (iconSize + iconGap) : 0.0f;
 

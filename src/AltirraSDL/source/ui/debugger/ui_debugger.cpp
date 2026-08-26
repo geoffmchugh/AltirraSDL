@@ -808,7 +808,7 @@ static void RenderDisplayPane() {
 						ImGui::GetIO().DisplayFramebufferScale;
 					cbData.framebufferScaleX = framebufferScale.x;
 					cbData.framebufferScaleY = framebufferScale.y;
-					if (backend->GetType() == DisplayBackendType::SDLRenderer) {
+					if (backend->GetType() != DisplayBackendType::OpenGL) {
 						// Match ImGui_ImplSDLRenderer3: when an explicit SDL
 						// render scale is active, SDL applies it to callback
 						// coordinates and multiplying by the framebuffer scale

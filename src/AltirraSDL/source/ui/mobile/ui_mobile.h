@@ -76,9 +76,9 @@ struct ATMobileUIState {
 	bool autoRestoreOnStart = true;
 
 	// --- Visual effects (CRT look) ---
-	// Scanlines work in both SDL_Renderer and GL backends (CPU path).
-	// Bloom and distortion require the GL display backend; they are
-	// silently no-op on the SDL_Renderer fallback.  The toggles stay
+	// Scanlines work in SDL_GPU, OpenGL, and SDL_Renderer. Bloom and
+	// distortion require a GPU-effects backend (SDL_GPU or OpenGL) and are
+	// silently no-op on the SDL_Renderer fallback. The toggles stay
 	// exposed regardless so the user can enable them ahead of a
 	// future GL build without losing their preference.
 	bool fxScanlines = false;

@@ -11,12 +11,23 @@ binary targets:
 
 | Target | Binary | Dependencies | Use case |
 |--------|--------|--------------|----------|
-| `AltirraSDL` | GUI emulator | SDL3 + Dear ImGui + librashader (optional) | End-user desktop emulator. Optional scripting via `--bridge`. |
+| `AltirraSDL` | GUI emulator | SDL3 + Dear ImGui | End-user desktop emulator. Optional scripting via `--bridge`. |
 | `AltirraBridgeServer` | Headless scripting server | SDL3 (audio only, dummy driver) | Automation, CI, AI agents, RE tooling. Same bridge protocol as `AltirraSDL --bridge`, ~30% smaller binary, no UI. Opt-in via `-DALTIRRA_BRIDGE_SERVER=ON`. See [AltirraBridge/README.md](src/AltirraSDL/AltirraBridge/README.md). |
 
 All three build paths coexist in the same repository and do not
 conflict (different output directories: `.sln` uses `out/`, CMake
 uses `build/`).
+
+### Desktop display backends
+
+SDL_GPU is the default desktop display backend. OpenGL is selected
+automatically if SDL_GPU initialization fails. Set
+`ALTIRRA_DISPLAY_BACKEND=opengl` to force the fallback or `sdlrenderer` to test
+the final compatibility backend. The renderer can also be selected persistently
+from **View > Renderer** in the Desktop interface and **Settings > Display** in
+the Gaming interface; changes apply on the next launch. Use
+`--renderer sdlgpu`, `--renderer opengl`, or
+`--renderer sdlrenderer` for a one-launch command-line override.
 
 ## Build Directory Convention
 
@@ -109,8 +120,7 @@ keeps the unsuffixed names shown above.
 
 By default SDL3 and SDL3_image are linked statically (see
 `-DALTIRRA_STATIC_SDL3=ON`, on by default for desktop), so the binary
-archive contains just the self-contained executable plus optional
-librashader:
+archive contains the self-contained executable and data files:
 
 On Linux and macOS, the default desktop presets also enable static
 FFmpeg + libx264 recording support, so AltirraSDL includes MP4
@@ -120,7 +130,6 @@ requires a prebuilt static FFmpeg prefix passed with
 ```
 AltirraSDL-4.50.18-linux.zip
     AltirraSDL          (executable — SDL3 + SDL3_image linked in)
-    librashader.so      (optional, with --librashader)
     Copying             (GPL v2+ license)
     extras/
         customeffects/  (shader/effect presets)
@@ -145,7 +154,6 @@ libSDL3.0.dylib next to the binary for easy upgrade), pass
 | `--native` | Windows only: build core libraries for use with Visual Studio `.sln` |
 | `--jobs N` or `-jN` | Override parallel job count (default: all cores) |
 | `--cmake "ARGS"` | Pass extra arguments to CMake configure |
-| `--librashader` | Build librashader from source (requires Rust, see below) |
 | `--cmake "-DALTIRRA_BRIDGE_SERVER=ON"` | Also build the headless `AltirraBridgeServer` target. `build.sh` does not wire this up as a dedicated flag — pass it through via `--cmake`. See the [AltirraBridge section](#altirrabridge-optional--scripting--automation) below. |
 | `--help` | Show help |
 
@@ -283,48 +291,6 @@ If you drive the bridge from Claude Code, the bundled
 python -m altirra_bridge.install_skills           # ./.claude/skills/
 python -m altirra_bridge.install_skills --user    # ~/.claude/skills/
 ```
-
----
-
-## Librashader (optional — shader presets)
-
-[librashader](https://github.com/SnowflakePowered/librashader) provides
-RetroArch-compatible shader preset support (CRT effects, scanlines, etc.).
-It is **optional** — the emulator works without it, but shader presets
-in the Screen Effects menu will be unavailable.
-
-### Building librashader
-
-```bash
-# Build AltirraSDL with librashader support
-./build.sh --librashader
-```
-
-This clones librashader, builds it from source with Rust, and places the
-shared library next to the executable. Only the **OpenGL and Vulkan**
-backends are compiled — no extra system DLLs are required.
-
-**Prerequisite:** A working [Rust toolchain](https://rustup.rs/) (`cargo`
-must be on PATH). The first build takes a few minutes; subsequent builds
-are cached.
-
-### Using a pre-built librashader
-
-If you prefer not to build from source, download a release from the
-[librashader releases page](https://github.com/SnowflakePowered/librashader/releases)
-and place the shared library next to the AltirraSDL executable:
-
-| Platform | File to place next to executable |
-|----------|----------------------------------|
-| Linux | `librashader.so` |
-| macOS | `librashader.dylib` |
-| Windows | `librashader.dll` |
-
-**Note:** Pre-built releases from upstream include all backends (D3D9,
-D3D11, D3D12, GL, Vulkan) and may require additional system libraries
-on Windows (`D3DX9_43.dll` from the legacy DirectX End-User Runtime,
-`dxcompiler.dll` from the Windows SDK). Building from source with
-`--librashader` avoids this by compiling only GL + Vulkan backends.
 
 ---
 
@@ -580,7 +546,7 @@ controllers correctly without any extra flags.
 ### Distribution mode — self-contained .app + DMG
 
 ```bash
-./build.sh --release --librashader --package
+./build.sh --release --package
 ```
 
 By default (`-DALTIRRA_STATIC_SDL3=ON`), SDL3 and SDL3_image are built
@@ -608,7 +574,6 @@ AltirraSDL-<ver>/
             MacOS/
                 AltirraSDL          (Mach-O executable, ad-hoc codesigned,
                                      SDL3 + SDL3_image linked statically)
-                librashader.dylib   (if built with --librashader)
                 fonts/
             Resources/
     extras/
@@ -628,12 +593,12 @@ tagged releases are ad-hoc signed only.
 
 ### What the CI does
 
-`.github/workflows/macos.yml` runs `./build.sh --release --librashader
---package` on `macos-14` (Apple Silicon), then verifies both archives
+`.github/workflows/macos.yml` runs `./build.sh --release --package` on
+`macos-14` (Apple Silicon), then verifies both archives
 with sanity checks: the zip is inspected with `cmake -E tar tf` and
 the DMG is mounted with `hdiutil attach` to confirm the
-`AltirraSDL.app/Contents/MacOS/AltirraSDL` binary, the bundled
-`librashader.dylib`, and the `altirra.icns` icon are present. With the
+`AltirraSDL.app/Contents/MacOS/AltirraSDL` binary and the `altirra.icns`
+icon are present. With the
 static default no `libSDL3*.dylib` is expected in the bundle (the CI
 prints a warning if one slips through). Both archives are uploaded as
 a single artifact and attached to the rolling `nightly` prerelease
@@ -695,10 +660,9 @@ based hosting — useful for embedding the emulator on an Atari 8-bit
 archive page ("click to run this game"), running in classrooms that
 disallow installs, or smoke-testing a commit from a URL.
 
-**Status:** experimental. Netplay, AltirraBridge scripting, and
-librashader are automatically disabled (browser has no UDP sockets,
-no OS-level scripting endpoint, and Emscripten's WebGL stubs are
-incompatible with librashader's direct GL calls). Rendering goes
+**Status:** experimental. Netplay and AltirraBridge scripting are
+automatically disabled (the browser has no UDP sockets or OS-level scripting
+endpoint). Rendering goes
 through SDL3's `SDL_Renderer` on WebGL2 — screen FX / CRT shaders are
 not available. Everything else works, including the full Desktop UI,
 System Configuration sidebar, debugger, game library, and mobile /
@@ -791,8 +755,6 @@ uploads a Pages artifact directly).
 
 - No netplay (the browser cannot open UDP sockets and the design
   requires COOP/COEP headers which most static hosts don't set).
-- No librashader / CRT shader presets (Emscripten's WebGL stubs
-  don't link against librashader's direct GL calls).
 - No AltirraBridge scripting server (no OS-level IPC endpoint).
 - Single-threaded: long background scans (palette solver, large
   game library) run on the main loop via a per-frame budget rather

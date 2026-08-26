@@ -55,20 +55,18 @@ upstream does is taken away — and most of them are only interesting
 - **Window drag-and-drop** of disk, cassette, cartridge, and executable
   images directly onto the running window.
 
-### Rendering: OpenGL + retro shader presets
+### Rendering: SDL_GPU with OpenGL fallback
 
-- **OpenGL 3.3 display backend** as the primary renderer (Windows uses
-  Direct3D). A software `SDL_Renderer` backend remains as a safe
-  fallback on systems without GL support.
-- **librashader integration** — load RetroArch-style shader preset
-  chains (`.slangp`, `.glslp`) and tweak their runtime parameters
-  from the UI. librashader is loaded dynamically at runtime, so it's
-  optional: the emulator runs fine without it and the UI simply
-  hides the shader options.
-- **GPU-side screen effects** — scanlines, bloom, distortion, dot
-  mask, and bicubic filtering are implemented as GLSL shaders in the
-  GL backend rather than CPU post-processing, which keeps them cheap
-  at high output resolutions.
+- **SDL_GPU display backend** as the primary desktop renderer, using Metal
+  on macOS and Vulkan or another native GPU API where supported.
+- **OpenGL 3.3 fallback** retains the complete built-in effects pipeline
+  when SDL_GPU initialization or shader support is unavailable. A basic
+  `SDL_Renderer` backend remains the final compatibility fallback.
+- **GPU-side screen effects** — scanlines, bloom, distortion, dot mask,
+  and bicubic filtering run through native SDL_GPU shaders or the OpenGL
+  fallback rather than CPU post-processing.
+- The macOS loop drains an autorelease pool every frame to prevent unbounded
+  memory growth in graphics and window-system calls.
 
 ### Gaming Mode UI (touch / mobile)
 

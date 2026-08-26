@@ -21,7 +21,6 @@
 #include "gl_helpers.h"
 #include <vd2/VDDisplay/display.h>
 #include <vd2/VDDisplay/displaytypes.h>
-#include "display_librashader.h"
 
 // Feature flag bits for screen effects shader program cache.
 enum ScreenFXFeature : uint32_t {
@@ -78,14 +77,6 @@ public:
 	void SetFilterMode(int mode) override;
 	void SetFilterSharpness(float sharpness) override;
 
-	bool SupportsExternalShaders() const override { return mLibrashader.IsAvailable(); }
-	bool LoadShaderPreset(const char *path) override;
-	void ClearShaderPreset() override;
-	const char *GetShaderPresetPath() const override;
-	bool HasShaderPreset() const override { return mLibrashader.HasPreset(); }
-	std::vector<LibrashaderParam> GetShaderParameters() const override { return mLibrashader.GetParameters(); }
-	bool SetShaderParameter(const char *name, float value) override { return mLibrashader.SetParameter(name, value); }
-
 	SDL_Renderer *GetSDLRenderer() override { return nullptr; }
 	SDL_Window *GetWindow() override { return mpWindow; }
 
@@ -97,8 +88,7 @@ public:
 	SDL_GLContext GetGLContext() const { return mGLContext; }
 
 private:
-	// Inner rendering (built-in effects).  Called by RenderFrame directly,
-	// or redirected into an FBO when librashader is active.
+	// Inner rendering for built-in effects.
 	void RenderFrameInner(float dstX, float dstY, float dstW, float dstH,
 		int srcW, int srcH);
 
@@ -237,10 +227,5 @@ private:
 	// Pixel buffer for lookup texture generation
 	std::vector<uint32_t> mLookupBuffer;
 
-	// librashader integration
-	LibrashaderRuntime mLibrashader;
-	uint32_t mFrameCounter = 0;
-	GLRenderTarget mLibrashaderFBO;     // built-in effects → librashader input
-	GLRenderTarget mLibrashaderOutFBO;  // librashader output → screen
 	GLuint mRenderTargetFBO = 0;        // restore target for sub-passes (0=screen)
 };

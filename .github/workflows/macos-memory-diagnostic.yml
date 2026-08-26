@@ -232,7 +232,7 @@ jobs:
 
           The ZIP contains AltirraSDL.app, a Terminal launcher, and MAC_OS_LEAK_DEBUG.md. Run the baseline mode first; it prints a MACLEAK memory/frame report every ten seconds and saves the output to a log file. Controlled new-frames-only, no-upload, and no-present modes are also included for follow-up tests.
 
-          This build excludes FFmpeg recording and librashader. It is not a normal release.
+          This build excludes FFmpeg recording. It is not a normal release.
           EOF
           )"
 

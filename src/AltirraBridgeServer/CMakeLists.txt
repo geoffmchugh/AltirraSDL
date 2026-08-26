@@ -1,7 +1,7 @@
 # AltirraBridgeServer — headless lean SDK target.
 #
 # Speaks the same bridge protocol as `AltirraSDL --bridge`, but with no
-# Dear ImGui, no librashader, no display backend, no input layer, no UI
+# Dear ImGui, no display backend, no input layer, no UI
 # tree, no embedded fonts, and no SDL3. The audio mixer is compiled
 # from audiooutput_sdl3.cpp with -DALTIRRA_AUDIO_NULL, which replaces
 # the SDL_AudioStream output with a silent null backend (samples are

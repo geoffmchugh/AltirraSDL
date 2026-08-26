@@ -53,26 +53,10 @@ DisplayBackendGL::DisplayBackendGL(SDL_Window *window, SDL_GLContext glContext)
 	glDisable(GL_STENCIL_TEST);
 	glDisable(GL_CULL_FACE);
 
-	// Try to initialize librashader (no-op if shared library not installed)
-	mLibrashader.Init();
-}
-
-bool DisplayBackendGL::LoadShaderPreset(const char *path) {
-	return mLibrashader.LoadPreset(path);
-}
-
-void DisplayBackendGL::ClearShaderPreset() {
-	mLibrashader.ClearPreset();
-}
-
-const char *DisplayBackendGL::GetShaderPresetPath() const {
-	return mLibrashader.GetPresetPath().c_str();
 }
 
 DisplayBackendGL::~DisplayBackendGL() {
 	SDL_GL_MakeCurrent(mpWindow, mGLContext);
-
-	mLibrashader.Shutdown();
 
 	// Clean up textures
 	if (mEmuTexture) glDeleteTextures(1, &mEmuTexture);
@@ -83,8 +67,6 @@ DisplayBackendGL::~DisplayBackendGL() {
 	if (mBicubicFilterTexV) glDeleteTextures(1, &mBicubicFilterTexV);
 
 	// Clean up FBOs
-	mLibrashaderFBO.Destroy();
-	mLibrashaderOutFBO.Destroy();
 	mBicubicFBO.Destroy();
 	mBicubicFBO2.Destroy();
 	mPALFBO.Destroy();
@@ -233,12 +215,6 @@ static int SaturateDoubleToInt(double value) {
 	return (int)value;
 }
 
-static int CeilPositiveDoubleToInt(double value) {
-	if (value >= (double)INT_MAX)
-		return INT_MAX;
-	return std::max(1, (int)std::ceil(value));
-}
-
 static int ClampRenderDimension(float value, int limit) {
 	const double boundedValue = std::min(
 		(double)value,
@@ -260,137 +236,6 @@ void DisplayBackendGL::RenderFrame(float dstX, float dstY, float dstW, float dst
 		|| !std::isfinite(dstW) || !std::isfinite(dstH)
 		|| dstW <= 0.0f || dstH <= 0.0f)
 		return;
-
-	// When librashader is active, redirect built-in rendering into an
-	// intermediate FBO so librashader can process the result on top.
-	bool useLibrashader = mLibrashader.HasPreset();
-	const int dstPixelW = CeilPositiveDoubleToInt((double)dstW);
-	const int dstPixelH = CeilPositiveDoubleToInt((double)dstH);
-
-	// Processing an image larger than the framebuffer cannot improve the
-	// visible result. More importantly, display zoom can make dstW/dstH
-	// enormous while only a window-sized portion is visible. Allocating
-	// bicubic/librashader targets at that off-screen size caused runaway
-	// GPU/unified-memory use (hundreds of GB at the maximum zoom).
-	const double processingScale = std::min({
-		1.0,
-		(double)std::max(1, mWinW) / (double)dstW,
-		(double)std::max(1, mWinH) / (double)dstH
-	});
-	const int vpW = std::clamp(
-		(int)std::ceil((double)dstW * processingScale),
-		1, std::max(1, mWinW));
-	const int vpH = std::clamp(
-		(int)std::ceil((double)dstH * processingScale),
-		1, std::max(1, mWinH));
-
-	if (useLibrashader) {
-		// Allocate both targets before redirecting any rendering. If the
-		// driver rejects either allocation, retain a valid default
-		// framebuffer and fall back to the built-in renderer for this frame.
-		if (mLibrashaderFBO.width != vpW || mLibrashaderFBO.height != vpH) {
-			if (!mLibrashaderFBO.Create(vpW, vpH, GL_RGBA8))
-				useLibrashader = false;
-		}
-		if (useLibrashader
-			&& (mLibrashaderOutFBO.width != vpW
-				|| mLibrashaderOutFBO.height != vpH))
-		{
-			if (!mLibrashaderOutFBO.Create(vpW, vpH, GL_RGBA8))
-				useLibrashader = false;
-		}
-	}
-
-	if (useLibrashader) {
-		// Redirect all subsequent rendering into the FBO.
-		// We translate the viewport so built-in effects think they're
-		// rendering at (0,0) in the FBO rather than at (dstX,dstY).
-		mLibrashaderFBO.Bind();
-		glClear(GL_COLOR_BUFFER_BIT);
-		// Override the window dimensions so viewport calculations inside
-		// RenderScreenFX use the FBO size, not the window size.
-		int savedWinW = mWinW, savedWinH = mWinH;
-		mWinW = vpW;
-		mWinH = vpH;
-
-		// Set the restore target so sub-passes (PAL, bloom, bicubic)
-		// return to this FBO instead of FBO 0 (the screen).
-		mRenderTargetFBO = mLibrashaderFBO.fbo;
-
-		// Render the complete image into the bounded processing target.
-		// It is scaled to the requested destination during the final blit,
-		// preserving zoom and pan without allocating invisible pixels.
-		const bool savedClipEnabled = mbOutputClipEnabled;
-		const int savedClipX = mOutputClipX;
-		const int savedClipY = mOutputClipY;
-		const int savedClipW = mOutputClipW;
-		const int savedClipH = mOutputClipH;
-		mbOutputClipEnabled = false;
-		glDisable(GL_SCISSOR_TEST);
-		RenderFrameInner(0.0f, 0.0f, (float)vpW, (float)vpH, srcW, srcH);
-		mbOutputClipEnabled = savedClipEnabled;
-		mOutputClipX = savedClipX;
-		mOutputClipY = savedClipY;
-		mOutputClipW = savedClipW;
-		mOutputClipH = savedClipH;
-
-		// Restore
-		mRenderTargetFBO = 0;
-		mWinW = savedWinW;
-		mWinH = savedWinH;
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		// Now apply librashader on top: FBO texture → screen
-		++mFrameCounter;
-
-		// Our built-in shaders render top-down (Y=0 at top, SDL/ImGui
-		// convention) into mLibrashaderFBO, but librashader expects
-		// standard OpenGL orientation (Y=0 at bottom).  Blit with a Y
-		// flip into mLibrashaderOutFBO, then use that as librashader
-		// input and mLibrashaderFBO as output.
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, mLibrashaderFBO.fbo);
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mLibrashaderOutFBO.fbo);
-		glBlitFramebuffer(
-			0, vpH, vpW, 0,        // src: flip Y
-			0, 0, vpW, vpH,        // dst: standard GL orientation
-			GL_COLOR_BUFFER_BIT, GL_NEAREST);
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		mLibrashader.Apply(mLibrashaderOutFBO.tex, mLibrashaderFBO.tex,
-			vpW, vpH, vpW, vpH, mFrameCounter);
-
-		// Restore GL state after librashader — some presets may enable
-		// sRGB framebuffer writes which would corrupt ImGui rendering.
-		glDisable(GL_BLEND);
-		glDisable(GL_DEPTH_TEST);
-		glDisable(GL_STENCIL_TEST);
-		glDisable(GL_CULL_FACE);
-		glDisable(GL_SCISSOR_TEST);
-		GLSetFramebufferSRGB(false);
-		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-		// Blit librashader output to the screen.  librashader output is
-		// in standard GL orientation (Y=0 at bottom); the screen uses
-		// SDL convention (Y=0 at top).  Flip src Y to compensate.
-		const int scrX1 = SaturateDoubleToInt((double)dstX);
-		const int scrY1 = SaturateDoubleToInt(
-			(double)savedWinH - ((double)dstY + (double)dstPixelH));
-		const int scrX2 = SaturateDoubleToInt(
-			(double)dstX + (double)dstPixelW);
-		const int scrY2 = SaturateDoubleToInt(
-			(double)savedWinH - (double)dstY);
-		ApplyOutputClip();
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, mLibrashaderFBO.fbo);
-		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-		glBlitFramebuffer(
-			0, vpH, vpW, 0,                          // src: flip Y (bottom-up → top-down)
-			scrX1, scrY1, scrX2, scrY2,
-			GL_COLOR_BUFFER_BIT, GL_NEAREST);
-		ClearOutputClip();
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-		glViewport(0, 0, savedWinW, savedWinH);
-		return;
-	}
 
 	RenderFrameInner(dstX, dstY, dstW, dstH, srcW, srcH);
 }
@@ -870,7 +715,7 @@ void DisplayBackendGL::RenderScreenFX(float dstX, float dstY, float dstW, float 
 			} else {
 				// GLCreateFBO restores framebuffer 0 on failure. Restore the
 				// caller's target so the remaining built-in passes still draw
-				// into the librashader input FBO when one is active.
+				// into the active render target.
 				glBindFramebuffer(GL_FRAMEBUFFER, mRenderTargetFBO);
 				glViewport(0, 0, mWinW, mWinH);
 			}

@@ -495,7 +495,7 @@ There are two binaries that speak the bridge protocol:
 | Binary                | Dependencies                          | Use case                         |
 |-----------------------|---------------------------------------|----------------------------------|
 | `AltirraBridgeServer` | Core emulation libs only              | Lean headless SDK build          |
-| `AltirraSDL`          | SDL3 + Dear ImGui (+ optional librashader) | GUI emulator; bridge via `--bridge` |
+| `AltirraSDL`          | SDL3 + Dear ImGui | GUI emulator; bridge via `--bridge` |
 
 Both live in the same CMake tree. To build the lean server:
 

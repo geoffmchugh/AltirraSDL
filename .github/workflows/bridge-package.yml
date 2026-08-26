@@ -7,7 +7,7 @@ name: AltirraBridge package
 # studies, and the Claude Code skill into a self-contained archive.
 #
 # This is independent from the main AltirraSDL releases: no GUI, no
-# fonts, no librashader, no display layer, no input layer. Use this
+# fonts, display layer, or input layer. Use this
 # package for headless automation, CI testing, AI-driven gameplay,
 # and reverse-engineering tooling.
 #
@@ -892,7 +892,7 @@ jobs:
             A headless Atari 8-bit emulator + scripting bridge,
             packaged with Python and C client SDKs, full documentation,
             **prebuilt C example binaries**, RE case studies, and a
-            Claude Code skill. **No GUI, no fonts, no librashader.**
+            Claude Code skill. **No GUI or fonts.**
 
             Use it for automation, CI testing, AI gameplay agents,
             and reverse-engineering tooling.

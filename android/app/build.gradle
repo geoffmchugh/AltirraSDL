@@ -50,8 +50,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments "-DANDROID_STL=c++_shared",
-                          "-DALTIRRA_SDL3=ON",
-                          "-DENABLE_LIBRASHADER=OFF"
+                          "-DALTIRRA_SDL3=ON"
                 // NDK Clang uses c++_shared by default for C++20 features
             }
         }

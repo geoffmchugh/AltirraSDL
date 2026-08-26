@@ -19,7 +19,7 @@ if(ALTIRRA_SDL3)
 endif()
 
 # Headless lean SDK target — same bridge protocol as `AltirraSDL --bridge`
-# but without ImGui, librashader, the SDL3 frontend's display/input/UI tree,
+# but without ImGui or the SDL3 frontend's display/input/UI tree,
 # embedded fonts, etc. SDL3 is still linked transitively (used only for the
 # audio mixer with the dummy driver). See AltirraBridgeServer/main_bridge.cpp
 # for the rationale.

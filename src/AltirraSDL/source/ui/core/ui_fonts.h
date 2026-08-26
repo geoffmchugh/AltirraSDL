@@ -13,11 +13,11 @@ class ATSimulator;
 // initial font atlas.  Call after ImGui::CreateContext() but BEFORE the
 // renderer backend is initialised — the backend picks up the atlas on its
 // first NewFrame.
-void ATUIFontsInit(float contentScale, bool usingGLBackend);
+void ATUIFontsInit(float contentScale);
 
 // Called once per frame, BEFORE ImGui_Impl*_NewFrame().  If a font setting
-// changed since the last call, tears down the backend texture, rebuilds the
-// atlas from the new settings, and writes the choice back to the registry.
+// changed since the last call, queues the old texture for destruction,
+// rebuilds the atlas, and writes the choice back to the registry.
 void ATUIFontsRebuildIfDirty();
 
 // Active fonts (valid after ATUIFontsInit).  Mono may equal UI if no

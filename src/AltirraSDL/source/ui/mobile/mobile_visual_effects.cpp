@@ -25,8 +25,8 @@ extern void ATRegistryFlushToDisk();
 // ATArtifactingParams + scanlines flag.  Safe to call on any
 // display backend — if the backend doesn't support GPU screen FX,
 // the params are still stored but SyncScreenFXToBackend in
-// main_sdl3.cpp skips the push.  Scanlines work in both the CPU and
-// GL paths.
+// main_sdl3.cpp skips the push. Scanlines work in SDL_GPU, OpenGL, and
+// SDL_Renderer paths.
 //
 // Non-destructive write semantics: this helper never zeroes the
 // numeric params just because the corresponding on/off flag is off.
@@ -204,13 +204,8 @@ void ATMobileUI_ApplyPerformancePreset(ATMobileUIState &mobileState) {
 	g_sim.SetAudioMonitorEnabled(audioMonitor);
 	ATUISetDriveSoundsEnabled(driveSounds);
 
-	// Drive the master CRT switches.  Don't clobber a librashader
-	// preset (kSFXMode_Preset) — those are an external rendering path
-	// the gaming-mode preset has no opinion about, so leave that mode
-	// alone.  Going from a preset back to Basic / None requires the
-	// user to clear the preset explicitly via the desktop View menu.
-	if (g_uiState.screenEffectsMode != ATUIState::kSFXMode_Preset)
-		g_uiState.screenEffectsMode = screenFXMode;
+	// Drive the master CRT switches.
+	g_uiState.screenEffectsMode = screenFXMode;
 
 	// Only force the artifacting mode when crossing the on/off
 	// boundary.  This preserves a desktop user's deliberate choice of

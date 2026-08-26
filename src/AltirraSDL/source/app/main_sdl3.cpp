@@ -52,6 +52,7 @@ extern "C" bool ATWasmBrokerIsActive();
 
 #include "crash_report.h"
 #include "macos_leak_debug.h"
+#include "../os/macos_autorelease_pool.h"
 #include <imgui.h>
 #include "display_sdl3_impl.h"
 #include "display_backend.h"
@@ -63,6 +64,7 @@ extern "C" bool ATWasmBrokerIsActive();
 // (Emscripten routes glXxx calls to its WebGL2 binding via -sUSE_WEBGL2=1
 // -sFULL_ES3=1).  See src/AltirraSDL/CMakeLists.txt.
 #include "display_backend_gl33.h"
+#include "display_backend_sdlgpu.h"
 #include "display_backend_sdl.h"
 #include "gl_funcs.h"
 #include "input_sdl3.h"
@@ -1461,6 +1463,11 @@ void ATBridgeRequestAppQuit() {
 // =========================================================================
 
 int main(int argc, char *argv[]) {
+	// SDL's Cocoa/Metal paths return autoreleased Objective-C objects during
+	// startup and shutdown. Keep an outer pool for those phases; each main-loop
+	// tick has a nested pool below so temporary objects are reclaimed promptly.
+	ATMacAutoreleasePool appAutoreleasePool;
+
 #ifdef __ANDROID__
 	// Must be installed before ANY fprintf(stderr, ...) / LOG_* macro call
 	// or SDL logging call, so every startup diagnostic reaches logcat.
@@ -1727,27 +1734,102 @@ int main(int argc, char *argv[]) {
 	// Used later for first-run detection (matches Windows main.cpp:3371).
 	const bool registryHadAnything = VDRegistryAppKey("", false).isReady();
 
-	phase = "window/GL";
+	phase = "window/display backend";
 
 	const int kDefaultWidth = 1280;
 	const int kDefaultHeight = 720;
 
 	// Backend selection policy:
-	//   1. Try the platform's "best fit" GL profile — Desktop 3.3 Core on
-	//      Windows/Linux/macOS, OpenGL ES 3.0 on Android/iOS.  Both paths
-	//      light up the full DisplayBackendGL feature set (screen FX,
-	//      bicubic, bloom, librashader where the runtime is present).
-	//   2. If GL/GLES context creation fails for any reason (driver bug,
-	//      headless display, sandbox), fall back to SDL_Renderer — no
-	//      custom shaders, but the emulator still renders correctly.
-	// The choice is silent and automatic; the user does not pick a
-	// backend.  IDisplayBackend::SupportsScreenFX / SupportsExternalShaders
-	// gate UI surfaces (Visual Effects menu, Load Shader Preset...) so
-	// a fallback session simply hides the unavailable items.
+	//   1. Prefer SDL_GPU (Metal on macOS, Vulkan or another native GPU API
+	//      where supported) on native systems.
+	//   2. Fall back to OpenGL/OpenGL ES if SDL_GPU or its required shader
+	//      format is unavailable.
+	//   3. SDL_Renderer remains the final compatibility fallback.
+	// The stored preference can be overridden with --renderer or the
+	// ALTIRRA_DISPLAY_BACKEND diagnostic environment variable. Capability
+	// queries gate built-in screen effects so a fallback session simply hides
+	// unavailable items.
 
+	bool useGPU = false;
 	bool useGL = false;
+	DisplayBackendSDLGPU *gpuBackend = nullptr;
 	SDL_GLContext glContext = nullptr;
 	GLProfile glProfile = GLProfile::Desktop33;
+	ATDisplayBackendPreference backendPreference =
+		ATDisplayBackendPreferenceLoad();
+	bool commandLineRenderer = false;
+
+	// Renderer selection must be consumed before the SDL window and ImGui
+	// backend exist. The full command-line pass later consumes the same pair
+	// so it cannot be mistaken for a boot image.
+	for (int i = 1; i < argc; ++i) {
+		if (SDL_strcasecmp(argv[i], "--renderer") || i + 1 >= argc)
+			continue;
+		if (argv[i + 1][0] == '-' && argv[i + 1][1] == '-')
+			break;
+
+		ATDisplayBackendPreference parsed;
+		if (ATDisplayBackendPreferenceParse(argv[i + 1], parsed)) {
+			backendPreference = parsed;
+			commandLineRenderer = true;
+			LOG_INFO("Main", "Command-line renderer requested: %s",
+				ATDisplayBackendPreferenceName(parsed));
+		} else {
+			LOG_ERROR("Main", "Invalid --renderer value '%s'; expected "
+				"sdlgpu, opengl, or sdlrenderer", argv[i + 1]);
+		}
+		break;
+	}
+
+	// Retain the existing environment variable as a diagnostic override, but
+	// give the documented command line precedence when both are present.
+	if (!commandLineRenderer) {
+		const char *backendOverride = SDL_getenv("ALTIRRA_DISPLAY_BACKEND");
+		if (backendOverride && *backendOverride) {
+			ATDisplayBackendPreference parsed;
+			if (ATDisplayBackendPreferenceParse(backendOverride, parsed)) {
+				backendPreference = parsed;
+				LOG_INFO("Main", "Environment renderer requested: %s",
+					ATDisplayBackendPreferenceName(parsed));
+			} else {
+				LOG_INFO("Main", "Ignoring unknown ALTIRRA_DISPLAY_BACKEND='%s'",
+					backendOverride);
+			}
+		}
+	}
+
+	const bool tryGPU =
+		backendPreference == ATDisplayBackendPreference::SDLGPU;
+	const bool tryGL =
+		backendPreference != ATDisplayBackendPreference::SDLRenderer;
+
+#if !defined(__EMSCRIPTEN__)
+	if (tryGPU)
+		g_pWindow = SDL_CreateWindow("AltirraSDL", kDefaultWidth, kDefaultHeight,
+			SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+	if (g_pWindow) {
+		// Passing a null device asks SDL to create and own the platform's
+		// preferred GPU device (Metal on Apple platforms, Vulkan on Linux
+		// and supported Android devices).
+		g_pRenderer = SDL_CreateGPURenderer(nullptr, g_pWindow);
+		if (g_pRenderer) {
+			gpuBackend = DisplayBackendSDLGPU::Create(g_pWindow, g_pRenderer);
+			if (gpuBackend) {
+				useGPU = true;
+				SDL_SetRenderVSync(g_pRenderer, 0);
+			} else {
+				SDL_DestroyRenderer(g_pRenderer);
+				g_pRenderer = nullptr;
+			}
+		} else {
+			LOG_ERROR("Main", "SDL_GPU renderer creation failed: %s", SDL_GetError());
+		}
+	}
+	if (!useGPU && g_pWindow) {
+		SDL_DestroyWindow(g_pWindow);
+		g_pWindow = nullptr;
+	}
+#endif
 
 	// Pick the preferred GL profile per platform.  Only ONE profile is
 	// attempted: requesting Desktop Core on Android, or ES on a desktop
@@ -1768,14 +1850,15 @@ int main(int argc, char *argv[]) {
 #endif
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-	g_pWindow = SDL_CreateWindow("AltirraSDL", kDefaultWidth, kDefaultHeight,
-		SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
-	if (g_pWindow) {
+	if (!useGPU && tryGL)
+		g_pWindow = SDL_CreateWindow("AltirraSDL", kDefaultWidth, kDefaultHeight,
+			SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
+	if (!useGPU && tryGL && g_pWindow) {
 		glContext = SDL_GL_CreateContext(g_pWindow);
 		if (glContext) {
 			SDL_GL_MakeCurrent(g_pWindow, glContext);
 			// GLLoadFunctions stores the active profile internally; all
-			// downstream code (shader compile, texture upload, librashader)
+			// downstream code (shader compile and texture upload)
 			// reads it via GLGetActiveProfile().
 			if (GLLoadFunctions(glProfile)) {
 				useGL = true;
@@ -1795,13 +1878,17 @@ int main(int argc, char *argv[]) {
 	// If GL failed, recreate window without OPENGL flag for SDL_Renderer.
 	// SDL_Renderer is a true safety net: it picks the platform's best
 	// 2D backend (D3D11/12 on Windows, Metal on macOS, GLES/Vulkan on
-	// Android, WebGL2 on Emscripten) but cannot run our screen FX /
-	// librashader pipeline.
-	if (!useGL) {
+	// Android, WebGL2 on Emscripten) but cannot run our screen FX pipeline.
+	if (!useGPU && !useGL) {
 		if (g_pWindow) SDL_DestroyWindow(g_pWindow);
 		g_pWindow = SDL_CreateWindow("AltirraSDL", kDefaultWidth, kDefaultHeight, SDL_WINDOW_RESIZABLE);
 		if (!g_pWindow) { LOG_INFO("Main", "CreateWindow: %s", SDL_GetError()); SDL_Quit(); return 1; }
-		LOG_INFO("Main", "Falling back to SDL_Renderer (screen FX and librashader unavailable)");
+		if (backendPreference == ATDisplayBackendPreference::SDLRenderer)
+			LOG_INFO("Main", "SDL_Renderer compatibility backend selected "
+				"(screen FX unavailable)");
+		else
+			LOG_INFO("Main", "Falling back to SDL_Renderer "
+				"(screen FX unavailable)");
 	}
 
 	// Set the window/taskbar/dock icon from the baked RGBA data.
@@ -1850,7 +1937,17 @@ int main(int argc, char *argv[]) {
 	ATRestoreWindowPlacement(g_pWindow);
 
 	// Create the display backend.
-	if (useGL) {
+	if (useGPU) {
+		g_pBackend = gpuBackend;
+		// The GPU backend is created before saved window placement is restored
+		// so initialization can still fall back to OpenGL. Refresh its output
+		// geometry now; relying only on a queued resize event leaves the first
+		// frames with the default 1280x720 scale on Retina/HiDPI displays.
+		int pixelW = 0;
+		int pixelH = 0;
+		SDL_GetWindowSizeInPixels(g_pWindow, &pixelW, &pixelH);
+		g_pBackend->OnResize(pixelW, pixelH);
+	} else if (useGL) {
 		g_pBackend = new DisplayBackendGL(g_pWindow, glContext);
 		// VSync swap interval is managed dynamically by the main loop based
 		// on g_desiredSwapInterval (set by UpdatePacerRate).  Start with
@@ -1865,7 +1962,8 @@ int main(int argc, char *argv[]) {
 		SDL_SetRenderVSync(g_pRenderer, 0);
 		g_pBackend = new DisplayBackendSDLRenderer(g_pWindow, g_pRenderer);
 	}
-	ATMacLeakDebugInit(g_pWindow, useGL ? "OpenGL" : "SDL_Renderer");
+	ATMacLeakDebugInit(g_pWindow,
+		useGPU ? "SDL_GPU" : (useGL ? "OpenGL" : "SDL_Renderer"));
 
 	// Load UI mode preference before ImGui init so ATUIApplyModeStyle()
 	// inside ATUIInit() sees the correct mode.
@@ -1932,7 +2030,7 @@ int main(int argc, char *argv[]) {
 		SDL_GetWindowSizeInPixels(g_pWindow, &pxW, &pxH);
 		if (pxW <= 0) pxW = kDefaultWidth;
 		if (pxH <= 0) pxH = kDefaultHeight;
-		const char *backendName = "SDL_Renderer";
+		const char *backendName = useGPU ? "SDL_GPU" : "SDL_Renderer";
 		if (useGL)
 			backendName = (glProfile == GLProfile::ES30)
 				? "OpenGL ES 3.0" : "OpenGL 3.3 Core";
@@ -1942,14 +2040,11 @@ int main(int argc, char *argv[]) {
 		g_pDisplay = new VDVideoDisplaySDL3(g_pWindow, pxW, pxH);
 	}
 
-	// Tell the display whether the GL backend supports screen effects.
+	// Tell the display whether the active GPU backend supports screen effects.
 	// This makes GTIA's IsScreenFXPreferred() return true, which enables
 	// accelerated screen effects (scanlines, bloom, color correction, etc.)
-	if (useGL)
+	if (useGPU || useGL)
 		g_pDisplay->SetScreenFXPreferred(true);
-
-	// Auto-load last librashader preset if one was saved
-	ATUIShaderPresetsAutoLoad(g_pBackend);
 
 	// Pre-simulator initialization matching Windows main.cpp:3559-3589.
 	// Register save state format 2 reader (needed for loading save states).
@@ -2711,6 +2806,8 @@ int main(int argc, char *argv[]) {
 	// global, a file-static, a function, or a static-local inside
 	// the lambda itself.
 	auto tickBody = []() {
+		ATMacAutoreleasePool tickAutoreleasePool;
+
 		HandleEvents();
 		if (!g_running) return;
 
@@ -3270,7 +3367,7 @@ int main(int argc, char *argv[]) {
 	ATUIStateSettingsShutdown();
 
 	delete g_pDisplay;
-	delete g_pBackend;  // destroys GL context or SDL_Renderer internally
+	delete g_pBackend;  // destroys backend-owned textures, shaders, or GL context
 	g_pBackend = nullptr;
 	if (g_pRenderer) {
 		SDL_DestroyRenderer(g_pRenderer);

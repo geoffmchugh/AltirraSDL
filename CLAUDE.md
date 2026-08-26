@@ -202,7 +202,7 @@ Two questions decide where it lives:
      the exit/suspend/profile-switch save lifecycle come for free.
    - *Machine-global* — file paths, window geometry, touch layout,
      anything meaningless per-profile.  Use direct `VDRegistryAppKey`
-     writes in a fork-owned namespace (`Shader Presets`, `Mobile`,
+     writes in a fork-owned namespace (`Mobile`, `Window Placement`,
      ...).  Add an immediate `ATRegistryFlushToDisk()` only on paths
      where Android may kill the process before a clean exit.
 

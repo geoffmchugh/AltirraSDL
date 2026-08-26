@@ -18,6 +18,7 @@
 #include "uiaccessors.h"
 #include "uitypes.h"
 #include "savestateio.h"
+#include "display_backend.h"
 
 extern ATSimulator g_sim;
 extern SDL_Window *g_pWindow;
@@ -104,7 +105,7 @@ static const char *kStretchLabels[] = {
 };
 
 void ATUIRenderDisplaySettings(ATSimulator &sim, ATUIState &state) {
-	ImGui::SetNextWindowSize(ImVec2(400, 340), ImGuiCond_Appearing);
+	ImGui::SetNextWindowSize(ImVec2(430, 410), ImGuiCond_Appearing);
 	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 	if (!ImGui::Begin("Display Settings", &state.showDisplaySettings, ImGuiWindowFlags_NoSavedSettings)) {
 		ImGui::End();
@@ -132,6 +133,30 @@ void ATUIRenderDisplaySettings(ATSimulator &sim, ATUIState &state) {
 		if (kStretchValues[i] == curSM) { smIdx = i; break; }
 	if (ImGui::Combo("Stretch Mode", &smIdx, kStretchLabels, 5))
 		ATUISetDisplayStretchMode(kStretchValues[smIdx]);
+
+#ifndef __EMSCRIPTEN__
+	// SDL3 extension: Windows Altirra has no equivalent backend selector.
+	// Reinitializing the renderer live would invalidate the ImGui backend and
+	// every cached texture, so persist the choice for the next launch.
+	{
+		ATDisplayBackendPreference preference =
+			ATDisplayBackendPreferenceLoad();
+		int rendererIndex = (int)preference;
+		static const char *kRendererLabels[] = {
+			"SDL_GPU (Recommended)", "OpenGL", "SDL_Renderer (Compatibility)"
+		};
+		if (ImGui::Combo("Renderer", &rendererIndex, kRendererLabels, 3)) {
+			ATDisplayBackendPreferenceSave(
+				(ATDisplayBackendPreference)rendererIndex);
+		}
+
+		IDisplayBackend *activeBackend = ATUIGetDisplayBackend();
+		ImGui::TextDisabled("Active: %s. Renderer changes apply after restart.",
+			activeBackend
+				? ATDisplayBackendTypeName(activeBackend->GetType())
+				: "Unknown");
+	}
+#endif
 
 	// Overscan
 	ATGTIAEmulator& gtia = sim.GetGTIA();
@@ -283,7 +308,11 @@ static void DrawPalettePreview(ATGTIAEmulator& gtia) {
 
 	// Compute cell size based on available width
 	float availW = ImGui::GetContentRegionAvail().x;
-	float cellSize = floorf(std::min(availW / 16.0f, 16.0f));
+	// Keep the preview compact enough that all primary Windows color controls
+	// remain visible in a 720px-tall desktop viewport. ImGui 1.92's slightly
+	// taller widgets otherwise push Intensity Scale just below the initial
+	// scroll area.
+	float cellSize = floorf(std::min(availW / 16.0f, 15.0f));
 	if (cellSize < 4.0f)
 		cellSize = 4.0f;
 

@@ -784,38 +784,53 @@ static void BuildViewMenu(NSMenu *menu) {
 		g_uiState.showAdjustColors = true;
 	});
 
-	// Screen Effects submenu (simplified for native menu - no ImGui tooltip)
+	// SDL3 extension: renderer choice has no native Windows equivalent.
+	{
+		NSMenu *rendererMenu = AddSubmenu(menu, @"Renderer");
+		const ATDisplayBackendPreference preference =
+			ATDisplayBackendPreferenceLoad();
+		AddItem(rendererMenu, @"SDL_GPU (Recommended)",
+			preference == ATDisplayBackendPreference::SDLGPU, true, [=]{
+				ATDisplayBackendPreferenceSave(
+					ATDisplayBackendPreference::SDLGPU);
+			});
+		AddItem(rendererMenu, @"OpenGL",
+			preference == ATDisplayBackendPreference::OpenGL, true, [=]{
+				ATDisplayBackendPreferenceSave(
+					ATDisplayBackendPreference::OpenGL);
+			});
+		AddItem(rendererMenu, @"SDL_Renderer (Compatibility)",
+			preference == ATDisplayBackendPreference::SDLRenderer, true, [=]{
+				ATDisplayBackendPreferenceSave(
+					ATDisplayBackendPreference::SDLRenderer);
+			});
+		AddSeparator(rendererMenu);
+
+		IDisplayBackend *activeBackend = ATUIGetDisplayBackend();
+		NSString *activeName = [NSString stringWithFormat:@"Active: %s",
+			activeBackend
+				? ATDisplayBackendTypeName(activeBackend->GetType())
+				: "Unknown"];
+		AddItem(rendererMenu, activeName, false, false, []{});
+		AddItem(rendererMenu, @"Changes apply after restart", false, false, []{});
+	}
+
+	// Screen Effects submenu.
 	{
 		NSMenu *sfxMenu = AddSubmenu(menu, @"Screen Effects");
-		IDisplayBackend *be = ATUIGetDisplayBackend();
-		bool hasPreset = be && be->HasShaderPreset();
-
-		if (hasPreset)
-			g_uiState.screenEffectsMode = ATUIState::kSFXMode_Preset;
-
 		bool isNone = (g_uiState.screenEffectsMode == ATUIState::kSFXMode_None);
 		bool isBasic = (g_uiState.screenEffectsMode == ATUIState::kSFXMode_Basic);
-		bool isPreset = (g_uiState.screenEffectsMode == ATUIState::kSFXMode_Preset);
 
 		AddItem(sfxMenu, @"(None)", isNone, true, [=]{
-			ATUIShaderPresetsClear(ATUIGetDisplayBackend());
 			g_uiState.screenEffectsMode = ATUIState::kSFXMode_None;
 		});
 		AddItem(sfxMenu, @"Basic", isBasic, true, [=]{
-			ATUIShaderPresetsClear(ATUIGetDisplayBackend());
 			g_uiState.screenEffectsMode = ATUIState::kSFXMode_Basic;
 		});
 		AddSeparator(sfxMenu);
 
-		bool canShowParams = !isNone;
-		AddItem(sfxMenu, @"Shader Parameters...", false, canShowParams, [=]{
-			if (g_uiState.screenEffectsMode == ATUIState::kSFXMode_Preset)
-				g_uiState.showShaderParams = true;
-			else
-				g_uiState.showScreenEffects = true;
-		});
-		AddItem(sfxMenu, @"Shader Setup...", false, true, [=]{
-			g_uiState.showShaderSetup = true;
+		AddItem(sfxMenu, @"Adjust Screen Effects...", false, !isNone, [=]{
+			g_uiState.showScreenEffects = true;
 		});
 	}
 

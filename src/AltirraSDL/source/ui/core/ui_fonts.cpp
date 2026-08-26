@@ -12,11 +12,6 @@
 #include <stdafx.h>
 #include <SDL3/SDL.h>
 #include <imgui.h>
-// imgui_impl_opengl3 compiles on every platform now, including WASM
-// (Emscripten routes the GL calls to its WebGL2 binding).  The font-
-// texture drop below dispatches by s_usingGLBackend at runtime.
-#include <imgui_impl_opengl3.h>
-#include <imgui_impl_sdlrenderer3.h>
 #include <vd2/system/vdtypes.h>
 #include <vd2/system/VDString.h>
 #include <vd2/system/registry.h>
@@ -89,7 +84,6 @@ static int       s_monoSize   = kDefaultMonoSize;
 static float s_contentScale = 1.0f;
 static bool  s_dirty = false;
 static bool  s_initialized = false;
-static bool  s_usingGLBackend = false;
 
 ImFont *g_pFontUI   = nullptr;
 ImFont *g_pFontMono = nullptr;
@@ -396,7 +390,9 @@ static void RebuildAtlas() {
 	// load — callers must always null-check before drawing with it.
 
 	io.FontDefault = g_pFontUI;
-	io.Fonts->Build();
+	// ImGui 1.92 renderer backends build and upload the dynamic atlas on
+	// their next NewFrame.  Calling Build() here marks all glyphs as
+	// preloaded and conflicts once RendererHasTextures is enabled.
 }
 
 // =========================================================================
@@ -439,9 +435,8 @@ static void SaveToRegistry() {
 // Public API
 // =========================================================================
 
-void ATUIFontsInit(float contentScale, bool usingGLBackend) {
+void ATUIFontsInit(float contentScale) {
 	s_contentScale = contentScale > 0 ? contentScale : 1.0f;
-	s_usingGLBackend = usingGLBackend;
 	s_initialized = true;
 
 	// Discover fonts: embedded blobs first (always present, never fails),
@@ -497,14 +492,8 @@ void ATUIFontsRebuildIfDirty() {
 	if (!s_dirty || !s_initialized) return;
 	s_dirty = false;
 
-	// Tear down the current backend texture so the next NewFrame uploads
-	// a fresh one built from the new atlas.
-	if (s_usingGLBackend) {
-		ImGui_ImplOpenGL3_DestroyFontsTexture();
-	} else {
-		ImGui_ImplSDLRenderer3_DestroyFontsTexture();
-	}
-
+	// Clear() queues the old dynamic texture for destruction.  The active
+	// renderer backend uploads the replacement during its next NewFrame.
 	RebuildAtlas();
 	SaveToRegistry();
 }

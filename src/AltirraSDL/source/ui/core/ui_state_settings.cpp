@@ -11,7 +11,7 @@
 //
 //	Storage rule (see CLAUDE.md "Persisting fork-only settings"): a value
 //	belongs here only if Windows would store it per-profile.  Machine-
-//	global fork state (shader preset paths, mobile layout) uses its own
+//	global fork state (such as mobile layout) uses its own
 //	VDRegistryAppKey namespace instead.
 
 #include <stdafx.h>
@@ -33,18 +33,11 @@ void LoadCallback(uint32 /*profileId*/, ATSettingsCategory mask, VDRegistryKey& 
 	if (!(mask & kATSettingsCategory_View))
 		return;
 
-	// Screen effects base mode (None vs Basic).  Preset mode is derived
-	// state — active exactly when a librashader preset is loaded, which
-	// persists via the machine-global Shader Presets\LastPreset key and
-	// is restored by ATUIShaderPresetsAutoLoad before the initial
-	// settings load — so an active preset must not be clobbered here.
-	if (g_uiState.screenEffectsMode != ATUIState::kSFXMode_Preset) {
-		const bool enabled = key.getBool("View: Screen effects enabled",
-			g_uiState.screenEffectsMode != ATUIState::kSFXMode_None);
-		g_uiState.screenEffectsMode = enabled
-			? ATUIState::kSFXMode_Basic
-			: ATUIState::kSFXMode_None;
-	}
+	const bool enabled = key.getBool("View: Screen effects enabled",
+		g_uiState.screenEffectsMode != ATUIState::kSFXMode_None);
+	g_uiState.screenEffectsMode = enabled
+		? ATUIState::kSFXMode_Basic
+		: ATUIState::kSFXMode_None;
 
 	int placement = key.getInt("View: Virtual keyboard placement",
 		g_uiState.oskPlacement);
@@ -57,13 +50,8 @@ void SaveCallback(uint32 /*profileId*/, ATSettingsCategory mask, VDRegistryKey& 
 	if (!(mask & kATSettingsCategory_View))
 		return;
 
-	// While a preset is active, leave the base None/Basic key untouched
-	// so the user's last explicit choice survives — it is the fallback
-	// applied when the saved preset fails to load on startup.
-	if (g_uiState.screenEffectsMode != ATUIState::kSFXMode_Preset) {
-		key.setBool("View: Screen effects enabled",
-			g_uiState.screenEffectsMode != ATUIState::kSFXMode_None);
-	}
+	key.setBool("View: Screen effects enabled",
+		g_uiState.screenEffectsMode != ATUIState::kSFXMode_None);
 
 	key.setInt("View: Virtual keyboard placement", g_uiState.oskPlacement);
 }

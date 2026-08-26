@@ -14,7 +14,7 @@
 
 // Profile of the active GL context.  Set once on successful context
 // creation (see TryCreatePreferredGLContext in main_sdl3.cpp) and read
-// by shader compilation / texture upload helpers / librashader init to
+// by shader compilation and texture upload helpers to
 // emit the right GLSL version header and pick a compatible pixel
 // transfer format.  Defaults to Desktop33 so pre-init reads are safe.
 enum class GLProfile {

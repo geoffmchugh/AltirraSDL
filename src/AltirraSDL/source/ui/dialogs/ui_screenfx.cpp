@@ -2,7 +2,7 @@
 //	5-tab ImGui dialog matching the Windows version's layout:
 //	  Main (scanlines, distortion), Bloom, HDR, Mask, Vignette.
 //	The Vignette tab is SDL3-exclusive; the radial-darkening stage
-//	lives alongside the other built-in effects in the GL backend.
+//	lives alongside the other built-in effects in the GPU backends.
 //
 //	The dialog is accessible from View > Adjust Screen Effects.
 //	When the SDL_Renderer fallback is active (no GL), the menu item is
@@ -301,22 +301,12 @@ void ATUIRenderScreenEffects(ATSimulator &sim, ATUIState &state) {
 	IDisplayBackend *backend = ATUIGetDisplayBackend();
 	bool hwSupport = backend && backend->SupportsScreenFX();
 
-	// Show info note when an external shader preset is also active.
-	if (backend && backend->HasShaderPreset()) {
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
-		ImGui::TextWrapped(
-			"A librashader preset is active and will be applied on top of "
-			"these built-in effects.");
-		ImGui::PopStyleColor();
-		ImGui::Spacing();
-	}
-
 	// Show warning banner when hardware acceleration is not available.
 	// This matches the Windows dialog's IDC_WARNING behavior.
 	if (!hwSupport) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ATUIColorWarningText());
 		ImGui::TextWrapped(
-			"Screen effects require the OpenGL display backend. "
+			"Screen effects require an SDL_GPU or OpenGL display backend. "
 			"The current display is using the SDL_Renderer fallback, "
 			"which does not support GPU post-processing.\n\n"
 			"All controls below are disabled.");

@@ -342,7 +342,7 @@ void RenderFileBrowser(ATSimulator &sim, ATUIState &uiState,
 				ATMobileCol(bPal.danger));
 			ImGui::BeginChild("PermBanner",
 				ImVec2(0, 0),
-				ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY
+				ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY
 					| ImGuiChildFlags_NavFlattened);
 			ImGui::Spacing();
 			// Title uses the danger colour directly so the red reads
@@ -778,7 +778,7 @@ void RenderFileBrowser(ATSimulator &sim, ATUIState &uiState,
 			ImGui::PushStyleColor(ImGuiCol_Border,
 				ATMobileCol(zbPal.accent));
 			ImGui::BeginChild("ZipBanner", ImVec2(0, 0),
-				ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY
+				ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY
 					| ImGuiChildFlags_NavFlattened);
 			VDStringA zipName = VDTextWToU8(
 				VDStringW(VDFileSplitPath(s_zipArchivePath.c_str())));

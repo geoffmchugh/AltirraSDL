@@ -347,7 +347,7 @@ finally:
 ```
 
 Use `AltirraBridgeServer` (not `AltirraSDL --bridge`) for CI: no
-window, no fonts, no librashader, ~30% smaller binary. Same
+window, no fonts, ~30% smaller binary. Same
 protocol, same SDK. Linux + macOS + Windows desktop, plus Android
 for the bridge built into the AltirraSDL APK.
 

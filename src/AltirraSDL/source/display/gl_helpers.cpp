@@ -135,10 +135,8 @@ GLuint GLCreateTexture2D(int w, int h, GLenum internalFormat, GLenum format,
 	GLuint tex;
 	glGenTextures(1, &tex);
 	glBindTexture(GL_TEXTURE_2D, tex);
-	// Use immutable storage (glTexStorage2D) — required by librashader which
-	// attaches textures to its own internal FBOs.  Mutable textures created
-	// with glTexImage2D cause framebuffer incompleteness in librashader's
-	// GL3.3 path on some drivers.
+	// Use immutable storage for predictable texture lifetime and driver
+	// allocation behavior.
 	glTexStorage2D(GL_TEXTURE_2D, 1, internalFormat, w, h);
 	if (data)
 		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, format, type, data);
@@ -262,8 +260,8 @@ void GLSetFramebufferSRGB(bool enable) {
 	// controlled per-attachment by the texture's internal format.  Since
 	// all our bloom/screen-FX textures are GL_RGBA8 (linear), nothing
 	// needs to be disabled on GLES.  Desktop GL does expose the toggle
-	// and some librashader presets flip it on; we must restore a known
-	// state before ImGui rendering.
+	// and external GL users may flip it on; restore a known state before
+	// ImGui rendering.
 	if (GLGetActiveProfile() == GLProfile::ES30)
 		return;
 #ifdef GL_FRAMEBUFFER_SRGB

@@ -179,7 +179,7 @@ option(ALTIRRA_SKIP_SDL3_IMAGE "Build without SDL3_image (disables image load/sa
 # single-threaded: pthreads are NOT used, and every std::thread /
 # VDThread site under SDL3 frontend code is compiled with a
 # synchronous or main-loop-cooperative replacement.  Direct OpenGL
-# paths (librashader, GL display backend, imgui_impl_opengl3) are
+# paths (GL display backend and imgui_impl_opengl3) are
 # excluded because their raw glXxx calls conflict with Emscripten's
 # WebGL stubs; rendering goes through SDL_Renderer on WebGL2 instead.
 #
@@ -349,6 +349,9 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
         if(ALTIRRA_FETCH_SDL3)
             message(STATUS "ALTIRRA_FETCH_SDL3=ON — skipping find_package(SDL3)")
             set(SDL3_FOUND FALSE)
+        elseif(ALTIRRA_SDL3)
+            # SDL_CreateGPURenderer and SDL_GPURenderState are 3.4 APIs.
+            find_package(SDL3 3.4.0 QUIET)
         else()
             find_package(SDL3 QUIET)
         endif()
@@ -388,7 +391,7 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
             message(STATUS "")
         else()
             # ── Auto-fetch SDL3 from source ─────────────────────────────
-            set(ALTIRRA_SDL3_VERSION "release-3.2.30")
+            set(ALTIRRA_SDL3_VERSION "release-3.4.14")
             message(STATUS "")
             message(STATUS "  ┌─ SDL3 ─────────────────────────────────────")
             message(STATUS "  │ No system SDL3 found.")
@@ -492,184 +495,10 @@ if(ALTIRRA_SDL3)
         FetchContent_Declare(
             imgui
             GIT_REPOSITORY https://github.com/ocornut/imgui.git
-            GIT_TAG        v1.91.8-docking
+            GIT_TAG        v1.92.9b-docking
             GIT_SHALLOW    TRUE
         )
         FetchContent_MakeAvailable(imgui)
-    endif()
-
-    # librashader C headers — fetched from the librashader repo.
-    # Only the include/ directory is needed (two C headers); the rest
-    # of the repo (Rust source) is ignored.  The actual shared library
-    # (librashader.so/.dll/.dylib) is loaded at runtime via dlopen —
-    # no link-time dependency.
-    option(ENABLE_LIBRASHADER "Enable librashader shader preset support" ON)
-    if(ALTIRRA_WASM AND ENABLE_LIBRASHADER)
-        message(WARNING "ENABLE_LIBRASHADER is not supported for ALTIRRA_WASM; forcing OFF.")
-        set(ENABLE_LIBRASHADER OFF CACHE BOOL "Enable librashader shader preset support" FORCE)
-    endif()
-    if(ENABLE_LIBRASHADER)
-        _altirra_clear_stale_fc(librashader_headers)
-        FetchContent_Declare(
-            librashader_headers
-            GIT_REPOSITORY https://github.com/SnowflakePowered/librashader.git
-            GIT_TAG        librashader-v0.10.1
-            GIT_SHALLOW    TRUE
-            # SOURCE_SUBDIR points to a dir with no CMakeLists.txt, so
-            # FetchContent_MakeAvailable skips add_subdirectory (we only
-            # need the C headers from include/, not the Rust build).
-            SOURCE_SUBDIR  include
-        )
-        FetchContent_MakeAvailable(librashader_headers)
-        # Copy the two C headers into vendor/librashader/ so
-        # __has_include("../vendor/librashader/librashader_ld.h") finds them.
-        # file(COPY) is used instead of symlinks for Windows compatibility.
-        set(LIBRASHADER_VENDOR_DIR "${CMAKE_SOURCE_DIR}/src/AltirraSDL/vendor/librashader")
-        file(MAKE_DIRECTORY "${LIBRASHADER_VENDOR_DIR}")
-        file(COPY
-            "${librashader_headers_SOURCE_DIR}/include/librashader.h"
-            "${librashader_headers_SOURCE_DIR}/include/librashader_ld.h"
-            DESTINATION "${LIBRASHADER_VENDOR_DIR}"
-        )
-
-        # Patch librashader_ld.h on Linux AND macOS: replace the simple
-        # dlopen() call with a search function that tries the executable's
-        # own directory first (for --librashader builds where the .so /
-        # .dylib is bundled next to the binary), then versioned sonames
-        # (Linux) / @executable_path / system paths (macOS).
-        #
-        # Without this patch, dlopen() with a bare filename does NOT look
-        # next to the running binary on either Linux or macOS — it only
-        # consults LD_LIBRARY_PATH / DYLD_*_PATH and the system search
-        # path, so a sibling library inside the AppImage or .app bundle
-        # is invisible to it.
-        if(UNIX AND NOT APPLE)
-            set(_LIBRA_LD_H "${LIBRASHADER_VENDOR_DIR}/librashader_ld.h")
-            file(READ "${_LIBRA_LD_H}" _LIBRA_LD_CONTENT)
-            string(REPLACE
-                "#define _LIBRASHADER_LOAD dlopen(\"librashader.so\", RTLD_LAZY)"
-                [=[
-// Patched by AltirraSDL CMakeLists.txt — search exe dir + versioned sonames.
-#include <linux/limits.h>
-#include <unistd.h>
-#include <string.h>
-static inline void *_librashader_dlopen_linux(void) {
-    // 1. Try loading from the executable's own directory
-    char exe_path[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (len > 0) {
-        exe_path[len] = '\0';
-        char *slash = strrchr(exe_path, '/');
-        if (slash) {
-            static const char *local_names[] = {
-                "librashader.so", "librashader.so.2", "librashader.so.1",
-            };
-            for (size_t i = 0; i < sizeof(local_names)/sizeof(local_names[0]); i++) {
-                if ((size_t)(slash - exe_path + 1) + strlen(local_names[i]) < PATH_MAX) {
-                    strcpy(slash + 1, local_names[i]);
-                    void *h = dlopen(exe_path, RTLD_LAZY);
-                    if (h) return h;
-                }
-            }
-        }
-    }
-    // 2. Try system paths with versioned sonames
-    static const char *sys_names[] = {
-        "librashader.so.2", "librashader.so.1", "librashader.so",
-    };
-    for (size_t i = 0; i < sizeof(sys_names)/sizeof(sys_names[0]); i++) {
-        void *h = dlopen(sys_names[i], RTLD_LAZY);
-        if (h) return h;
-    }
-    return NULL;
-}
-#define _LIBRASHADER_LOAD _librashader_dlopen_linux()
-]=]
-                _LIBRA_LD_CONTENT "${_LIBRA_LD_CONTENT}")
-            file(WRITE "${_LIBRA_LD_H}" "${_LIBRA_LD_CONTENT}")
-        endif()
-
-        if(APPLE)
-            set(_LIBRA_LD_H "${LIBRASHADER_VENDOR_DIR}/librashader_ld.h")
-            file(READ "${_LIBRA_LD_H}" _LIBRA_LD_CONTENT)
-            string(REPLACE
-                "#define _LIBRASHADER_LOAD dlopen(\"librashader.dylib\", RTLD_LAZY)"
-                [=[
-// Patched by AltirraSDL CMakeLists.txt — search exe dir + @executable_path
-// + system paths.  Upstream just does dlopen("librashader.dylib", ...),
-// but on macOS that does NOT look next to the running binary; it only
-// consults DYLD_LIBRARY_PATH / DYLD_FALLBACK_LIBRARY_PATH (defaults to
-// $HOME/lib:/usr/local/lib:/usr/lib), so a sibling dylib inside
-// AltirraSDL.app/Contents/MacOS/ is invisible to it.  Mirror the Linux
-// patch above using _NSGetExecutablePath() to walk the running binary's
-// own directory first.
-#include <mach-o/dyld.h>
-#include <sys/syslimits.h>
-#include <string.h>
-#include <stdint.h>
-static inline void *_librashader_dlopen_macos(void) {
-    // 1. Try loading from the running executable's own directory.
-    char exe_path[PATH_MAX];
-    uint32_t size = (uint32_t)sizeof(exe_path);
-    if (_NSGetExecutablePath(exe_path, &size) == 0) {
-        char *slash = strrchr(exe_path, '/');
-        if (slash) {
-            static const char *local_names[] = {
-                "librashader.dylib",
-                "librashader.2.dylib",
-                "librashader.1.dylib",
-            };
-            for (size_t i = 0;
-                 i < sizeof(local_names)/sizeof(local_names[0]);
-                 i++) {
-                if ((size_t)(slash - exe_path + 1)
-                        + strlen(local_names[i]) < PATH_MAX) {
-                    strcpy(slash + 1, local_names[i]);
-                    void *h = dlopen(exe_path, RTLD_LAZY);
-                    if (h) return h;
-                }
-            }
-        }
-    }
-    // 2. Try @executable_path / @loader_path — dyld resolves these
-    //    natively to the running binary's directory and the directory
-    //    of whatever Mach-O is calling dlopen() respectively.
-    {
-        static const char *at_names[] = {
-            "@executable_path/librashader.dylib",
-            "@loader_path/librashader.dylib",
-        };
-        for (size_t i = 0;
-             i < sizeof(at_names)/sizeof(at_names[0]);
-             i++) {
-            void *h = dlopen(at_names[i], RTLD_LAZY);
-            if (h) return h;
-        }
-    }
-    // 3. Bare name — falls through to DYLD_LIBRARY_PATH /
-    //    DYLD_FALLBACK_LIBRARY_PATH for users with a system-wide copy.
-    {
-        static const char *sys_names[] = {
-            "librashader.dylib",
-            "librashader.2.dylib",
-            "librashader.1.dylib",
-        };
-        for (size_t i = 0;
-             i < sizeof(sys_names)/sizeof(sys_names[0]);
-             i++) {
-            void *h = dlopen(sys_names[i], RTLD_LAZY);
-            if (h) return h;
-        }
-    }
-    return NULL;
-}
-#define _LIBRASHADER_LOAD _librashader_dlopen_macos()
-]=]
-                _LIBRA_LD_CONTENT "${_LIBRA_LD_CONTENT}")
-            file(WRITE "${_LIBRA_LD_H}" "${_LIBRA_LD_CONTENT}")
-        endif()
-
-        message(STATUS "librashader headers: ${librashader_headers_SOURCE_DIR}/include")
     endif()
 
     # SDL3_image — PNG/JPEG load/save for oshelper_sdl3.cpp.
@@ -679,7 +508,7 @@ static inline void *_librashader_dlopen_macos(void) {
     # ALTIRRA_SKIP_SDL3_IMAGE forces it off: no target is created, nothing
     # is linked, and oshelper_sdl3.cpp compiles stub entry points that
     # throw at runtime when the UI asks to load or save an image.
-    set(ALTIRRA_SDL3_IMAGE_VERSION "release-3.2.4" CACHE STRING "SDL3_image git tag to fetch")
+    set(ALTIRRA_SDL3_IMAGE_VERSION "release-3.4.4" CACHE STRING "SDL3_image git tag to fetch")
 
     if(ALTIRRA_SKIP_SDL3_IMAGE)
         message(STATUS "")
@@ -746,6 +575,9 @@ static inline void *_librashader_dlopen_macos(void) {
         set(SDLIMAGE_BACKEND_STB    ON  CACHE BOOL "" FORCE)
         set(SDLIMAGE_BACKEND_WIC    OFF CACHE BOOL "" FORCE)
         set(SDLIMAGE_BACKEND_IMAGEIO OFF CACHE BOOL "" FORCE)
+        # SDL_image 3.4 enables libpng in addition to stb by default. Keep
+        # the dependency-free stb path used by this project.
+        set(SDLIMAGE_PNG_LIBPNG     OFF CACHE BOOL "" FORCE)
 
         _altirra_clear_stale_fc(sdl3_image)
         FetchContent_Declare(

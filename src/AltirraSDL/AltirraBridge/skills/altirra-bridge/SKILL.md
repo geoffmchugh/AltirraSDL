@@ -37,7 +37,7 @@ hex dump", that's general 6502 knowledge — this skill won't help.
    it's being scripted, or when the user is debugging the bridge
    itself.
 2. **`AltirraBridgeServer`** — headless lean-SDK build. No window,
-   no fonts, no librashader, no input layer. ~30% smaller binary.
+   no fonts and no input layer. ~30% smaller binary.
    Use when running automated tests, in CI, or as a backend service.
 
 Both speak the **same protocol** and accept the **same SDK clients**.

@@ -5,7 +5,7 @@
 # Prerequisites (satisfied by build.sh --appimage):
 #   - The CMake "package_altirra" target has been built, producing
 #     build/<preset>/AltirraSDL-<ver>/ with AltirraSDL (SDL3 linked
-#     statically by default), optionally librashader.so, extras/, and
+#     statically by default), extras/, and
 #     Copying.  If ALTIRRA_STATIC_SDL3=OFF was passed, libSDL3.so.0
 #     will also be present and is bundled automatically.
 #
@@ -38,7 +38,7 @@ esac
 # ── Locate package_altirra output ────────────────────────────────────────
 PKG_DIR="$(find "$BUILD_DIR" -maxdepth 1 -type d -name 'AltirraSDL-*' | head -1)"
 [ -n "$PKG_DIR" ] || die "package_altirra output not found under $BUILD_DIR.
-Run: ./build.sh --package --librashader  first (or use --appimage)."
+Run: ./build.sh --package first (or use --appimage)."
 
 VERSION="$(basename "$PKG_DIR" | sed 's/^AltirraSDL-//')"
 info "Packaging AppImage for AltirraSDL ${VERSION} (${LD_ARCH})"
@@ -76,13 +76,6 @@ else
     info "libSDL3.so.0 not present — SDL3 is linked statically into the binary"
 fi
 
-if [ -f "$PKG_DIR/librashader.so" ]; then
-    cp -a "$PKG_DIR/librashader.so" "$APPDIR/usr/bin/"
-    ok "Bundled librashader.so"
-else
-    info "librashader.so not present — AppImage will not include shader presets"
-fi
-
 # Extras (custom effects, sample devices, device server scripts)
 if [ -d "$PKG_DIR/extras" ]; then
     cp -a "$PKG_DIR/extras" "$APPDIR/usr/share/altirra/extras"
@@ -106,7 +99,7 @@ cp "$ICON_SRC"    "$APPDIR/.DirIcon"
 # Custom AppRun — puts our bundled libs ahead of anything else.
 cat > "$APPDIR/AppRun" <<'APPRUN_EOF'
 #!/bin/sh
-# AppRun for AltirraSDL — injects the bundled libSDL3 / librashader.
+# AppRun for AltirraSDL — injects bundled SDL libraries.
 HERE="$(dirname "$(readlink -f "$0")")"
 export LD_LIBRARY_PATH="$HERE/usr/bin:$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"

@@ -26,11 +26,10 @@
 #   ./build.sh --libretro-test    With --libretro, also build and run the
 #                                 libretro smoke tests.
 #   ./build.sh --jobs 8           Override parallel job count
-#   ./build.sh --librashader      Build librashader from source (needs Rust)
 #   ./build.sh --fetch-sdl3       Force-fetch SDL3 from source (ignore system SDL3).
 #                                 Use this if find_package picks up a broken SDL3.
 #   ./build.sh --appimage         Linux only: produce a portable .AppImage
-#                                 (implies --package --librashader)
+#                                 (implies --package)
 #   ./build.sh --cmake "-DFOO=1"  Pass extra CMake arguments
 #   ./build.sh --help             Show this help
 #
@@ -73,7 +72,6 @@ PACKAGE=0
 SOURCE_ARCHIVE=0
 JOBS=""
 CMAKE_EXTRA_ARGS=""
-BUILD_LIBRASHADER=0
 APPIMAGE=0
 LIBRETRO=0
 LIBRETRO_FLATPAK=0
@@ -97,7 +95,6 @@ while [ $# -gt 0 ]; do
         --source)   SOURCE_ARCHIVE=1 ;;
         --jobs)     shift; JOBS="$1" ;;
         -j*)        JOBS="${1#-j}" ;;
-        --librashader) BUILD_LIBRASHADER=1 ;;
         --fetch-sdl3)
             if [ -z "$CMAKE_EXTRA_ARGS" ]; then
                 CMAKE_EXTRA_ARGS="-DALTIRRA_FETCH_SDL3=ON"
@@ -105,7 +102,7 @@ while [ $# -gt 0 ]; do
                 CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DALTIRRA_FETCH_SDL3=ON"
             fi
             ;;
-        --appimage) APPIMAGE=1; PACKAGE=1; BUILD_LIBRASHADER=1 ;;
+        --appimage) APPIMAGE=1; PACKAGE=1 ;;
         --cmake)    shift; CMAKE_EXTRA_ARGS="$1" ;;
         --help|-h)
             sed -n '3,/^$/{ s/^# //; s/^#//; p }' "$0"
@@ -206,11 +203,6 @@ source "$SCRIPTS_DIR/configure.sh"
 
 # ── Build ─────────────────────────────────────────────────────────────────
 source "$SCRIPTS_DIR/compile.sh"
-
-# ── librashader (optional) ───────────────────────────────────────────────
-if [ "$BUILD_LIBRASHADER" = "1" ]; then
-    source "$SCRIPTS_DIR/librashader.sh"
-fi
 
 # ── Package (optional) ────────────────────────────────────────────────────
 if [ "$PACKAGE" = "1" ]; then

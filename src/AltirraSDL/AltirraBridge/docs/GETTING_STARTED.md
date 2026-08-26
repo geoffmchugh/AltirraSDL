@@ -129,10 +129,10 @@ Use this when you want the SDL3 frontend's full feature set
 (deferred actions, settings persistence, the same boot path as the
 GUI) but no UI on screen.
 
-### Option C: `AltirraBridgeServer` — lean SDK build (no SDL3 / no ImGui / no librashader)
+### Option C: `AltirraBridgeServer` — lean SDK build (no SDL3 / no ImGui)
 
 For embedding the emulator in another project where the SDL3 +
-ImGui + librashader dependencies are unwelcome, build the
+GUI dependencies are unwelcome, build the
 separate `AltirraBridgeServer` target:
 
 ```sh

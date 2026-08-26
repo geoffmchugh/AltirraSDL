@@ -442,7 +442,7 @@ void RenderSettings(ATSimulator &sim, ATUIState &uiState,
 				// no-icon path and the title takes the full leading
 				// area instead.
 				ImFont *iconFont = cats[i].icon ? ATUIGetFontIcon() : nullptr;
-				const float iconSize = iconFont ? iconFont->FontSize : 0.0f;
+				const float iconSize = iconFont ? iconFont->LegacySize : 0.0f;
 				const float iconGap  = iconFont ? dp(16.0f)          : 0.0f;
 				const float iconSlot = iconSize + iconGap;
 				if (iconFont) {
@@ -1032,6 +1032,34 @@ void RenderSettings(ATSimulator &sim, ATUIState &uiState,
 		}
 
 		ATTouchSection("Display");
+
+#ifndef __EMSCRIPTEN__
+		// SDL3 extension shared with the Desktop Display Settings dialog.
+		// Backend resources cannot be replaced safely while the app is running,
+		// so this selection is persisted for the next launch.
+		{
+			ATDisplayBackendPreference preference =
+				ATDisplayBackendPreferenceLoad();
+			int rendererIndex = (int)preference;
+			static const char *renderers[] = {
+				"SDL GPU", "OpenGL", "Compatible"
+			};
+			if (ATTouchSegmented("Renderer", &rendererIndex, renderers, 3)) {
+				ATDisplayBackendPreferenceSave(
+					(ATDisplayBackendPreference)rendererIndex);
+			}
+
+			IDisplayBackend *activeBackend = ATUIGetDisplayBackend();
+			char rendererStatus[160];
+			snprintf(rendererStatus, sizeof rendererStatus,
+				"Active: %s. Changes apply after restart. SDL GPU falls "
+				"back to OpenGL when unavailable.",
+				activeBackend
+					? ATDisplayBackendTypeName(activeBackend->GetType())
+					: "Unknown");
+			ATTouchMutedText(rendererStatus);
+		}
+#endif
 
 #ifdef __ANDROID__
 		// Full Screen — hides the OS status bar and navigation bar so

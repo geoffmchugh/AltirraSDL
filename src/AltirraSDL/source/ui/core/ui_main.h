@@ -52,11 +52,9 @@ struct ATUIState {
 	bool showRewind = false;
 	bool showTapeEditor = false;
 	bool showScreenEffects = false;
-	bool showShaderParams = false;
-	bool showShaderSetup = false;
 
 	// Screen effects mode
-	enum ScreenEffectsMode { kSFXMode_None, kSFXMode_Basic, kSFXMode_Preset };
+	enum ScreenEffectsMode { kSFXMode_None, kSFXMode_Basic };
 	ScreenEffectsMode screenEffectsMode = kSFXMode_Basic;
 
 	// View menu dialogs
@@ -314,14 +312,6 @@ const ATHudSettings& ATUIGetHudSettings();
 // Pan/Zoom tool state (managed in main_sdl3.cpp event loop)
 bool ATUIIsPanZoomToolActive();
 void ATUISetPanZoomToolActive(bool active);
-
-// Shader presets (ui_shader_presets.cpp)
-void ATUIShaderPresetsAutoLoad(IDisplayBackend *backend);
-void ATUIShaderPresetsPoll(IDisplayBackend *backend);
-void ATUIShaderPresetsClear(IDisplayBackend *backend);
-void ATUIRenderShaderPresetMenu(IDisplayBackend *backend);
-void ATUIRenderShaderParameters(ATUIState &state);
-void ATUIRenderShaderSetupHelp(ATUIState &state);
 
 // HUD overlay — drive LEDs, status messages, FPS, pause, errors
 void ATUIRenderHUDOverlay();

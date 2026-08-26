@@ -76,7 +76,7 @@ ok "Binary package: ${C_BOLD}${ARCHIVE_PATH}${C_RESET} ($SIZE)"
 #
 # The DMG is built from $PKG_DIR (the already-populated package directory
 # under $BUILD_DIR), so it includes every post-build step that ran against
-# the zip: optional librashader.dylib, optional libSDL3*.dylib (only when
+# the zip: optional libSDL3*.dylib (only when
 # -DALTIRRA_STATIC_SDL3=OFF was passed — the default static build has no
 # sidecar), and the ad-hoc codesign from the package_altirra target.
 # hdiutil preserves the code signature — no re-signing needed.
