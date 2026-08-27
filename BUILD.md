@@ -62,7 +62,7 @@ The `build.sh` script automates the CMake workflow on all platforms.
 ### Requirements
 
 - CMake 3.24 or newer
-- A C++20 compiler
+- A C++23 compiler
 - A Make-compatible build tool for the bundled FFmpeg/libx264 build
 - Git (used to fetch bundled dependencies)
 - Linux/macOS desktop builds: `pkg-config` (used to configure the bundled
@@ -81,7 +81,10 @@ sudo apt install pkg-config
 ```
 
 SDL3, SDL3_image, Dear ImGui, FFmpeg, and libx264 are fetched automatically
-when needed. To build without FFmpeg/libx264 and MP4 recording, pass
+when needed. Fetching SDL3 supplies its source code, but Linux system headers
+for its platform backends must still be installed. CMake validates SDL 3.4's
+required X11 feature headers before configuring SDL and reports all missing
+packages in one error. To build without FFmpeg/libx264 and MP4 recording, pass
 `--cmake "-DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF"`.
 
 ```bash
@@ -153,6 +156,8 @@ libSDL3.0.dylib next to the binary for easy upgrade), pass
 | `--clean` | Remove build directory before configuring |
 | `--native` | Windows only: build core libraries for use with Visual Studio `.sln` |
 | `--jobs N` or `-jN` | Override parallel job count (default: all cores) |
+| `--fetch-sdl3` | Force bundled SDL3 source (already implied by the default static desktop build) |
+| `--system-sdl3` | Require an installed SDL3 >= 3.4 and use shared linkage; never fall back to FetchContent |
 | `--cmake "ARGS"` | Pass extra arguments to CMake configure |
 | `--cmake "-DALTIRRA_BRIDGE_SERVER=ON"` | Also build the headless `AltirraBridgeServer` target. `build.sh` does not wire this up as a dedicated flag — pass it through via `--cmake`. See the [AltirraBridge section](#altirrabridge-optional--scripting--automation) below. |
 | `--help` | Show help |
@@ -299,29 +304,48 @@ python -m altirra_bridge.install_skills --user    # ~/.claude/skills/
 ### Linux (Debian/Ubuntu)
 
 ```bash
-sudo apt install cmake build-essential libsdl3-dev
+sudo apt install cmake build-essential git pkg-config ninja-build \
+  libx11-dev libxext-dev libxcursor-dev libxi-dev libxfixes-dev \
+  libxrandr-dev libxss-dev libxtst-dev
 ```
+
+For all SDL Linux backends, also install the applicable audio, Wayland, input,
+and graphics development packages listed in SDL's `docs/README-linux.md`.
+The packages above are the X11 set SDL 3.4 requires when those default-enabled
+features are compiled.
 
 ### Linux (Fedora)
 
 ```bash
-sudo dnf install cmake gcc-c++ SDL3-devel
+sudo dnf install cmake gcc-c++ git pkgconf-pkg-config ninja-build \
+  libX11-devel libXext-devel libXcursor-devel libXi-devel libXfixes-devel \
+  libXrandr-devel libXScrnSaver-devel libXtst-devel
 ```
+
+`SDL3-devel` is not required by the default build because Altirra fetches and
+statically links its pinned SDL version. It is useful with
+`./build.sh --system-sdl3`, which delegates backend configuration to Fedora's
+SDL package.
 
 ### macOS
 
 ```bash
-brew install cmake sdl3
+brew install cmake ninja pkg-config
 ```
+
+The default build fetches SDL. For faster iteration with Homebrew SDL, install
+`sdl3 sdl3_image` and use `./build.sh --system-sdl3`.
 
 ### Windows (for CMake/SDL3 build)
 
-```
-vcpkg install sdl3:x64-windows
-```
+The default build fetches SDL3 and SDL3_image; Git and a supported Visual
+Studio toolchain are sufficient. To use a package-manager SDL instead, install
+SDL3 through vcpkg, set `SDL3_DIR` or `CMAKE_PREFIX_PATH`, and configure with
+`-DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_REQUIRE_SYSTEM_SDL3=ON`.
 
-Or install SDL3 development libraries manually and ensure they are on
-`CMAKE_PREFIX_PATH`.
+On every platform, `ALTIRRA_REQUIRE_SYSTEM_SDL3=ON` is intentionally strict:
+CMake fails if SDL >= 3.4 cannot be found instead of silently switching back
+to a downloaded dependency.
 
 ### Windows (for Visual Studio native build)
 
@@ -494,11 +518,11 @@ self-contained `.app` bundle + `.dmg`).
 
 ```bash
 brew install cmake sdl3 sdl3_image
-./build.sh
+./build.sh --system-sdl3
 open build/macos-release/src/AltirraSDL/AltirraSDL.app
 ```
 
-`./build.sh` without `--package` links the executable against the
+`./build.sh --system-sdl3` links the executable against the
 Homebrew-installed SDL3 (via `find_package`). The `.app` runs fine on
 your machine but is **not** redistributable — the Mach-O load commands
 reference absolute Homebrew paths (`/opt/homebrew/opt/sdl3/lib/...`),

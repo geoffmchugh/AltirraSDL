@@ -26,20 +26,24 @@
 #   ./build.sh --libretro-test    With --libretro, also build and run the
 #                                 libretro smoke tests.
 #   ./build.sh --jobs 8           Override parallel job count
-#   ./build.sh --fetch-sdl3       Force-fetch SDL3 from source (ignore system SDL3).
-#                                 Use this if find_package picks up a broken SDL3.
+#   ./build.sh --fetch-sdl3       Force-fetch SDL3 source (ignore system SDL3).
+#                                 Already the default for static desktop builds;
+#                                 useful with custom shared configurations.
+#   ./build.sh --system-sdl3      Require installed SDL3 >= 3.4 with dynamic
+#                                 linkage; never fall back to a download.
 #   ./build.sh --appimage         Linux only: produce a portable .AppImage
 #                                 (implies --package)
 #   ./build.sh --cmake "-DFOO=1"  Pass extra CMake arguments
 #   ./build.sh --help             Show this help
 #
 # On Windows, run from Git Bash, MSYS2, or WSL.
-# Requires: cmake 3.24+, C++20 compiler, git (for fetching SDL3/ImGui), make,
+# Requires: cmake 3.24+, C++23 compiler, git (for fetching SDL3/ImGui), make,
 # and pkg-config on Linux/macOS (for bundled FFmpeg/libx264 recording).
 # macOS: brew install pkg-config
-# SDL3 is auto-fetched and built from source if no system SDL3 is found,
-# so no manual SDL3 install is required.  If you have SDL3 installed and
-# CMake picks up a broken copy, pass --fetch-sdl3 to force the source build.
+# Desktop builds fetch SDL3 by default and link it statically. Linux still
+# needs development headers for SDL's enabled platform backends. CMake checks
+# the SDL 3.4 X11 requirements up front and prints distro-specific commands.
+# Pass --system-sdl3 to use a distro-provided SDL3 >= 3.4 instead.
 # Linux/macOS desktop presets also enable static FFmpeg + libx264 video
 # recording by default, giving AltirraSDL MP4 recording out of the box.
 # Windows SDL3 builds currently need a prebuilt static FFmpeg prefix via
@@ -77,6 +81,14 @@ LIBRETRO=0
 LIBRETRO_FLATPAK=0
 LIBRETRO_TEST=0
 
+append_cmake_arg() {
+    if [ -z "$CMAKE_EXTRA_ARGS" ]; then
+        CMAKE_EXTRA_ARGS="$1"
+    else
+        CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS $1"
+    fi
+}
+
 # ── Parse arguments ───────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -93,17 +105,27 @@ while [ $# -gt 0 ]; do
         --clean)    CLEAN=1 ;;
         --package)  PACKAGE=1 ;;
         --source)   SOURCE_ARCHIVE=1 ;;
-        --jobs)     shift; JOBS="$1" ;;
+        --jobs)
+            [ $# -ge 2 ] || die "--jobs requires a number"
+            shift
+            JOBS="$1"
+            ;;
         -j*)        JOBS="${1#-j}" ;;
         --fetch-sdl3)
-            if [ -z "$CMAKE_EXTRA_ARGS" ]; then
-                CMAKE_EXTRA_ARGS="-DALTIRRA_FETCH_SDL3=ON"
-            else
-                CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DALTIRRA_FETCH_SDL3=ON"
-            fi
+            append_cmake_arg "-DALTIRRA_FETCH_SDL3=ON"
+            append_cmake_arg "-DALTIRRA_REQUIRE_SYSTEM_SDL3=OFF"
+            ;;
+        --system-sdl3)
+            append_cmake_arg "-DALTIRRA_STATIC_SDL3=OFF"
+            append_cmake_arg "-DALTIRRA_FETCH_SDL3=OFF"
+            append_cmake_arg "-DALTIRRA_REQUIRE_SYSTEM_SDL3=ON"
             ;;
         --appimage) APPIMAGE=1; PACKAGE=1 ;;
-        --cmake)    shift; CMAKE_EXTRA_ARGS="$1" ;;
+        --cmake)
+            [ $# -ge 2 ] || die "--cmake requires an argument"
+            shift
+            append_cmake_arg "$1"
+            ;;
         --help|-h)
             sed -n '3,/^$/{ s/^# //; s/^#//; p }' "$0"
             exit 0 ;;
@@ -177,14 +199,16 @@ export CLEAN JOBS CMAKE_EXTRA_ARGS SOURCE_ARCHIVE
 # leaving end users to chase a system SDL3 install — defeating the point
 # of --package.  Skip on Windows (no system SDL3 to find anyway) and
 # Android (handled separately).  Honour an explicit override.
+if [ "$PACKAGE" = "1" ] \
+   && echo "$CMAKE_EXTRA_ARGS" | grep -q 'ALTIRRA_REQUIRE_SYSTEM_SDL3=ON'; then
+    die "--system-sdl3 cannot be combined with --package; packages must be" \
+        "self-contained"
+fi
+
 if [ "$PACKAGE" = "1" ] && [ "$PLATFORM" != "windows" ]; then
     if ! echo "$CMAKE_EXTRA_ARGS" | grep -q "ALTIRRA_FETCH_SDL3"; then
         info "Packaging mode — forcing -DALTIRRA_FETCH_SDL3=ON for self-contained archive"
-        if [ -z "$CMAKE_EXTRA_ARGS" ]; then
-            CMAKE_EXTRA_ARGS="-DALTIRRA_FETCH_SDL3=ON"
-        else
-            CMAKE_EXTRA_ARGS="$CMAKE_EXTRA_ARGS -DALTIRRA_FETCH_SDL3=ON"
-        fi
+        append_cmake_arg "-DALTIRRA_FETCH_SDL3=ON"
         # If a previous configure cached a system SDL3, the cache will
         # keep using it even after we add -DALTIRRA_FETCH_SDL3=ON.
         # Drop the cache so the next configure starts fresh.
