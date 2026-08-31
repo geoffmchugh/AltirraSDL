@@ -105,7 +105,7 @@ void ATCreateDeviceHardDiskPhysical(const ATPropertySet& pset, IATDevice **dev);
 
 extern const ATDeviceDefinition g_ATDeviceDefIDEPhysDisk = {
 	"hdphysdisk", "harddisk", L"Hard disk image (physical disk)",
-	ATCreateDeviceHardDiskPhysical
+	ATCreateDeviceHardDiskPhysical, 0, "harddisk"
 };
 
 ATIDEPhysicalDisk::ATIDEPhysicalDisk()

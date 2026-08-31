@@ -26,7 +26,7 @@ void ATCreateDevicePrinterFX80(const ATPropertySet& pset, IATDevice **dev) {
 	*dev = p.release();
 }
 
-extern const ATDeviceDefinition g_ATDeviceDefPrinterFX80 = { "fx80", "fx80", L"Epson FX-80/FX-80+ 80-Column Printer", ATCreateDevicePrinterFX80 };
+extern const ATDeviceDefinition g_ATDeviceDefPrinterFX80 = { "fx80", "fx80", L"Epson FX-80/FX-80+ 80-Column Printer", ATCreateDevicePrinterFX80, 0, "parallel" };
 
 ATDevicePrinterFX80::ATDevicePrinterFX80() {
 	SetSaveStateAgnostic();

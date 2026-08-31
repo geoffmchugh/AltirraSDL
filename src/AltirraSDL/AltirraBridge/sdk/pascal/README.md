@@ -51,6 +51,8 @@ Modern hardware add-ons are available through `ConfigSet` and
 ```pascal
 Bridge.ConfigSet('addons', 'modern');
 Bridge.DeviceSet('vbxe', True, 'version=126 base=d600');
+Bridge.DeviceAdd('printer', '/');
+Bridge.DeviceAdd('fx80', '/printer/parport', 'auto_lf=1 intl_mode=1');
 ```
 
 ```pascal

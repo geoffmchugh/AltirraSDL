@@ -25,7 +25,7 @@ void ATCreateDeviceFileWriter(const ATPropertySet& pset, IATDevice **dev) {
 	*dev = p.release();
 }
 
-extern const ATDeviceDefinition g_ATDeviceDefFileWriter = { "parfilewriter", "parfilewriter", L"File Writer", ATCreateDeviceFileWriter };
+extern const ATDeviceDefinition g_ATDeviceDefFileWriter = { "parfilewriter", "parfilewriter", L"File Writer", ATCreateDeviceFileWriter, 0, "parallel serial" };
 
 void ATDeviceFileWriter::GetDeviceInfo(ATDeviceInfo& info) {
 	info.mpDef = &g_ATDeviceDefFileWriter;

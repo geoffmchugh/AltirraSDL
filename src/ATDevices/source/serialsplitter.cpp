@@ -21,7 +21,7 @@
 
 void ATCreateDeviceSerialSplitter(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefSerialSplitter = { "serialsplitter", nullptr, L"Serial port splitter", ATCreateDeviceSerialSplitter };
+extern const ATDeviceDefinition g_ATDeviceDefSerialSplitter = { "serialsplitter", nullptr, L"Serial port splitter", ATCreateDeviceSerialSplitter, 0, "serial" };
 
 class ATDeviceSerialSplitter final : public ATDeviceT<IATDeviceParent, IATDeviceSerial>
 {

@@ -21,6 +21,27 @@
 #include <stdafx.h>
 #include <at/atcore/deviceimpl.h>
 
+bool ATDeviceDefinition::SupportsChildType(const char *type) const {
+	if (!mpChildTypes || !type || !*type)
+		return false;
+
+	const size_t typeLen = strlen(type);
+	const char *p = mpChildTypes;
+	while (*p) {
+		while (*p == ' ')
+			++p;
+
+		const char *typeStart = p;
+		while (*p && *p != ' ')
+			++p;
+
+		if ((size_t)(p - typeStart) == typeLen && !memcmp(typeStart, type, typeLen))
+			return true;
+	}
+
+	return false;
+}
+
 ATDevice::ATDevice() {
 }
 

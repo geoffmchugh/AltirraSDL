@@ -65,7 +65,9 @@ extern const ATDeviceDefinition g_ATDeviceDefBlockDevTemporaryWriteFilter = {
 	"hdtempwritefilter",
 	nullptr,
 	L"Temporary write filter",
-	ATCreateDeviceBlockDevTemporaryWriteFilter
+	ATCreateDeviceBlockDevTemporaryWriteFilter,
+	0,
+	"harddisk"
 };
 
 ATBlockDeviceTemporaryWriteFilter::ATBlockDeviceTemporaryWriteFilter() {

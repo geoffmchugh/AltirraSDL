@@ -43,7 +43,7 @@ sint64 ATIDEGetPhysicalDiskSize(const wchar_t *path) {
 
 void ATCreateDeviceHardDiskPhysical(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefIDEPhysDisk = { "hdphysdisk", "harddisk", L"Hard disk image (physical disk)", ATCreateDeviceHardDiskPhysical };
+extern const ATDeviceDefinition g_ATDeviceDefIDEPhysDisk = { "hdphysdisk", "harddisk", L"Hard disk image (physical disk)", ATCreateDeviceHardDiskPhysical, 0, "harddisk" };
 
 ATIDEPhysicalDisk::ATIDEPhysicalDisk()
 	: mhDisk(INVALID_HANDLE_VALUE)

@@ -32,7 +32,9 @@ extern const ATDeviceDefinition g_ATDeviceDefVideoStillImage {
 		vdrefptr<ATDeviceVideoStillImage> devp(new ATDeviceVideoStillImage);
 		
 		*dev = devp.release();
-	}
+	},
+	0,
+	"videosource"
 };
 
 ATDeviceVideoStillImage::ATDeviceVideoStillImage() {

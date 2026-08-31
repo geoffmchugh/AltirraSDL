@@ -50,6 +50,7 @@
 #include "bridge_logging.h"
 
 #include <at/atcore/device.h>
+#include <at/atcore/deviceparent.h>
 #include <at/atcore/enumparse.h>
 #include <at/atcore/propertyset.h>
 
@@ -403,20 +404,54 @@ void AddDeviceErrors(std::string& payload, IATDevice& dev) {
 	payload += "],";
 }
 
-std::string BuildDevicePayload(ATSimulator& sim, const std::string& tag, bool reset) {
+IATDevice *GetRootDeviceByTag(ATDeviceManager& dm, const std::string& tag) {
+	for (IATDevice *dev : dm.GetDevices(true, false, false)) {
+		ATDeviceInfo info {};
+		dev->GetDeviceInfo(info);
+		if (info.mpDef && info.mpDef->mpTag && !strcmp(info.mpDef->mpTag, tag.c_str()))
+			return dev;
+	}
+
+	return nullptr;
+}
+
+IATDevice *ResolveDeviceReference(ATDeviceManager& dm, const std::string& ref) {
+	if (!ref.empty() && ref.front() == '/')
+		return dm.ParsePath(ref.c_str()).mpDevice;
+
+	return GetRootDeviceByTag(dm, ToLower(ref));
+}
+
+std::string BuildDevicePayload(ATSimulator& sim, const std::string& ref, bool reset,
+	IATDevice *resolvedDev = nullptr)
+{
 	ATDeviceManager *dm = sim.GetDeviceManager();
+	IATDevice *dev = resolvedDev;
+	if (!dev && dm)
+		dev = ResolveDeviceReference(*dm, ref);
+
+	std::string tag = ToLower(ref);
+	const ATDeviceDefinition *def = nullptr;
+	if (dev) {
+		ATDeviceInfo info {};
+		dev->GetDeviceInfo(info);
+		def = info.mpDef;
+		if (def && def->mpTag)
+			tag = def->mpTag;
+	} else if (dm && (ref.empty() || ref.front() != '/')) {
+		def = dm->GetDeviceDefinition(tag.c_str());
+	}
+
 	std::string payload;
 	AddString(payload, "tag", tag);
-	const ATDeviceDefinition *def = dm ? dm->GetDeviceDefinition(tag.c_str()) : nullptr;
 	AddBool(payload, "known", def != nullptr);
 	if (def && def->mpName)
 		AddString(payload, "name", WideToU8(def->mpName));
-	AddBool(payload, "present", dm && dm->GetDeviceByTag(tag.c_str()) != nullptr);
+	AddBool(payload, "present", dev != nullptr);
 	AddBool(payload, "reset", reset);
 
-	if (dm) {
-		IATDevice *dev = dm->GetDeviceByTag(tag.c_str());
-		if (dev) {
+	if (dm && dev) {
+			AddString(payload, "path", dm->GetPathForDevice(dev).c_str());
 			ATPropertySet settings;
 			dev->GetSettings(settings);
 			payload += "\"settings\":";
@@ -427,7 +462,6 @@ std::string BuildDevicePayload(ATSimulator& sim, const std::string& tag, bool re
 				const auto& customDev = static_cast<const ATDeviceCustom&>(*dev);
 				AddBool(payload, "config_loaded", customDev.GetConfigError() == nullptr);
 			}
-		}
 	}
 
 	StripTrailingComma(payload);
@@ -459,33 +493,66 @@ std::string GetAddonsPreset(ATSimulator& sim) {
 }
 
 std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool enable,
-	const std::vector<std::string>& optionTokens, size_t optionStart, bool resetAfter)
+	const std::vector<std::string>& optionTokens, size_t optionStart, bool resetAfter,
+	IATDeviceBus *addBus = nullptr, bool forceAdd = false)
 {
 	const std::string tag = ToLower(rawTag);
+	const std::string commandName = forceAdd ? "DEVICE_ADD" : "DEVICE_SET";
+	const std::string errorPrefix = commandName + ": ";
 	ATDeviceManager *dm = sim.GetDeviceManager();
 	if (!dm)
-		return JsonError("DEVICE_SET: device manager unavailable");
+		return JsonError(errorPrefix + "device manager unavailable");
 
 	const ATDeviceDefinition *def = dm->GetDeviceDefinition(tag.c_str());
 	if (!def)
-		return JsonError("DEVICE_SET: unknown device '" + rawTag + "'");
+		return JsonError(errorPrefix + "unknown device '" + rawTag + "'");
 	if (def->mFlags & kATDeviceDefFlag_Hidden)
-		return JsonError("DEVICE_SET: hidden device '" + rawTag + "' cannot be managed by the bridge");
-	if ((def->mFlags & kATDeviceDefFlag_Internal) && !dm->GetDeviceByTag(tag.c_str()))
-		return JsonError("DEVICE_SET: internal device '" + rawTag + "' is not present");
+		return JsonError(errorPrefix + "hidden device '" + rawTag + "' cannot be managed by the bridge");
+	if (forceAdd && (def->mFlags & kATDeviceDefFlag_Internal))
+		return JsonError(errorPrefix + "internal device '" + rawTag + "' cannot be added");
+	if ((def->mFlags & kATDeviceDefFlag_Internal) && !GetRootDeviceByTag(*dm, tag))
+		return JsonError(errorPrefix + "internal device '" + rawTag + "' is not present");
 
 	bool changed = false;
 	bool reset = false;
+	IATDevice *targetDev = nullptr;
 
 	if (enable) {
 		ATPropertySet pset;
-		IATDevice *dev = dm->GetDeviceByTag(tag.c_str());
+		IATDevice *dev = forceAdd ? nullptr : GetRootDeviceByTag(*dm, tag);
+		if (!dev && !addBus && def->mpChildTypes)
+			return JsonError(errorPrefix + "device '" + rawTag
+				+ "' requires a parent bus; use DEVICE_ADD with parent=<bus-path>");
 		if (dev)
 			dev->GetSettings(pset);
 		else
 			ApplyQuickDeviceDefaults(tag, pset);
 
 		for (size_t i = optionStart; i < optionTokens.size(); ++i) {
+			if (tag == "custom") {
+				const auto eq = optionTokens[i].find('=');
+				if (eq == std::string::npos || eq == 0)
+					return JsonError(errorPrefix + "expected key=value option, got '" + optionTokens[i] + "'");
+
+				const std::string optKey = ToLower(optionTokens[i].substr(0, eq));
+				const std::string rawValue = optionTokens[i].substr(eq + 1);
+				if (optKey == "path") {
+					pset.SetString("path", VDTextU8ToW(VDStringSpanA(rawValue.c_str())).c_str());
+					continue;
+				}
+
+				if (optKey == "hotreload" || optKey == "allowunsafe") {
+					bool value = false;
+					if (!ParseBoolLiteral(rawValue, value))
+						return JsonError(errorPrefix + "custom option '" + optKey + "' requires true/false or on/off");
+
+					pset.SetBool(optKey.c_str(), value);
+					continue;
+				}
+
+				return JsonError(errorPrefix + "unknown custom device option '" + optKey + "'");
+			}
+
 			if (tag == "vbxe") {
 				const auto eq = optionTokens[i].find('=');
 				const std::string optKey = eq == std::string::npos ? std::string() : ToLower(optionTokens[i].substr(0, eq));
@@ -509,8 +576,8 @@ std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool e
 					}
 
 					return JsonError(err.empty()
-						? "DEVICE_SET: VBXE base must be d600 or d700"
-						: std::string("DEVICE_SET: ") + err);
+						? errorPrefix + "VBXE base must be d600 or d700"
+						: errorPrefix + err);
 				}
 			}
 			if (tag == "covox") {
@@ -543,7 +610,7 @@ std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool e
 
 			std::string err;
 			if (!ParseDeviceSettingToken(optionTokens[i], pset, err))
-				return JsonError("DEVICE_SET: " + err);
+				return JsonError(errorPrefix + err);
 		}
 
 		try {
@@ -553,21 +620,33 @@ std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool e
 					changed = true;
 				}
 			} else {
-				dev = dm->AddDevice(def, pset);
+				dev = dm->AddDevice(def, pset, addBus != nullptr);
 				if (!dev)
-					return JsonError("DEVICE_SET: could not add device '" + rawTag + "'");
+					return JsonError(errorPrefix + "could not add device '" + rawTag + "'");
+
+				if (addBus) {
+					try {
+						addBus->AddChildDevice(dev);
+						if (!dev->GetParent())
+							throw MyError("device '%s' was rejected by the requested parent bus", rawTag.c_str());
+					} catch(...) {
+						dm->RemoveDevice(dev);
+						throw;
+					}
+				}
 				changed = true;
 			}
+			targetDev = dev;
 		} catch (const MyError& e) {
-			return JsonError(std::string("DEVICE_SET: ") + e.c_str());
+			return JsonError(errorPrefix + e.c_str());
 		}
 	} else {
-		IATDevice *dev = dm->GetDeviceByTag(tag.c_str());
+		IATDevice *dev = GetRootDeviceByTag(*dm, tag);
 		if (dev) {
 			ATDeviceInfo info {};
 			dev->GetDeviceInfo(info);
 			if (info.mpDef && (info.mpDef->mFlags & kATDeviceDefFlag_Internal))
-				return JsonError("DEVICE_SET: internal device '" + rawTag + "' cannot be removed");
+				return JsonError(errorPrefix + "internal device '" + rawTag + "' cannot be removed");
 			dm->RemoveDevice(dev);
 			changed = true;
 		}
@@ -579,20 +658,20 @@ std::string SetDeviceEnabled(ATSimulator& sim, const std::string& rawTag, bool e
 	}
 
 	if (enable && tag == "custom") {
-		IATDevice *dev = dm->GetDeviceByTag(tag.c_str());
+		IATDevice *dev = targetDev ? targetDev : GetRootDeviceByTag(*dm, tag);
 		if (dev) {
 			const auto& customDev = static_cast<const ATDeviceCustom&>(*dev);
 			if (const wchar_t *error = customDev.GetConfigError()) {
 				const std::string errorU8 = WideToU8(error);
 				return JsonError(
-					"DEVICE_SET: unable to load custom device '" + rawTag
+					errorPrefix + "unable to load custom device '" + rawTag
 						+ "': " + errorU8,
-					BuildDevicePayload(sim, tag, reset));
+					BuildDevicePayload(sim, tag, reset, dev));
 			}
 		}
 	}
 
-	return JsonOk(BuildDevicePayload(sim, tag, reset));
+	return JsonOk(BuildDevicePayload(sim, tag, reset, targetDev));
 }
 
 // ---------------------------------------------------------------------------
@@ -2277,7 +2356,10 @@ std::string CmdConfig(ATSimulator& sim, const std::vector<std::string>& tokens) 
 // DEVICE_* — generic device management for bridge clients.
 // ---------------------------------------------------------------------------
 
-std::string CmdDeviceList(ATSimulator& sim, const std::vector<std::string>& /*tokens*/) {
+std::string CmdDeviceList(ATSimulator& sim, const std::vector<std::string>& tokens) {
+	if (tokens.size() != 1)
+		return JsonError("DEVICE_LIST: usage: DEVICE_LIST");
+
 	ATDeviceManager *dm = sim.GetDeviceManager();
 	if (!dm)
 		return JsonError("DEVICE_LIST: device manager unavailable");
@@ -2285,7 +2367,7 @@ std::string CmdDeviceList(ATSimulator& sim, const std::vector<std::string>& /*to
 	std::string payload;
 	payload += "\"installed\":[";
 	bool first = true;
-	for (IATDevice *dev : dm->GetDevices(true, true, false)) {
+	for (IATDevice *dev : dm->GetDevices(false, true, false)) {
 		if (!dev) continue;
 		ATDeviceInfo info {};
 		dev->GetDeviceInfo(info);
@@ -2298,6 +2380,7 @@ std::string CmdDeviceList(ATSimulator& sim, const std::vector<std::string>& /*to
 		if (info.mpDef->mpName)
 			AddString(payload, "name", WideToU8(info.mpDef->mpName));
 		AddBool(payload, "internal", (info.mpDef->mFlags & kATDeviceDefFlag_Internal) != 0);
+		AddString(payload, "path", dm->GetPathForDevice(dev).c_str());
 		StripTrailingComma(payload);
 		payload += '}';
 	}
@@ -2324,8 +2407,59 @@ std::string CmdDeviceList(ATSimulator& sim, const std::vector<std::string>& /*to
 
 std::string CmdDeviceGet(ATSimulator& sim, const std::vector<std::string>& tokens) {
 	if (tokens.size() != 2)
-		return JsonError("DEVICE_GET: usage: DEVICE_GET <tag>");
-	return JsonOk(BuildDevicePayload(sim, ToLower(tokens[1]), false));
+		return JsonError("DEVICE_GET: usage: DEVICE_GET <tag-or-path>");
+	return JsonOk(BuildDevicePayload(sim, tokens[1], false));
+}
+
+std::string CmdDeviceAdd(ATSimulator& sim, const std::vector<std::string>& tokens) {
+	if (tokens.size() < 3)
+		return JsonError("DEVICE_ADD: usage: DEVICE_ADD <tag> parent=<bus-path|/> [key=value...]");
+
+	ATDeviceManager *dm = sim.GetDeviceManager();
+	if (!dm)
+		return JsonError("DEVICE_ADD: device manager unavailable");
+	const ATDeviceDefinition *def = dm->GetDeviceDefinition(ToLower(tokens[1]).c_str());
+	if (!def)
+		return JsonError("DEVICE_ADD: unknown device '" + tokens[1] + "'");
+
+	std::string parentPath;
+	std::vector<std::string> settings { tokens[0], tokens[1], "on" };
+	for (size_t i = 2; i < tokens.size(); ++i) {
+		if (tokens[i].rfind("parent=", 0) == 0) {
+			if (!parentPath.empty())
+				return JsonError("DEVICE_ADD: parent may only be specified once");
+			parentPath = tokens[i].substr(7);
+		} else {
+			settings.push_back(tokens[i]);
+		}
+	}
+
+	if (parentPath.empty())
+		return JsonError("DEVICE_ADD: explicit parent=<bus-path|/> is required");
+
+	IATDeviceBus *bus = nullptr;
+	if (parentPath == "/") {
+		if (def->mpChildTypes)
+			return JsonError("DEVICE_ADD: device '" + tokens[1]
+				+ "' requires a compatible parent bus and cannot be added at the root");
+	} else {
+		const ATParsedDevicePath ref = dm->ParsePath(parentPath.c_str());
+		bus = ref.mpDeviceBus;
+		if (!bus)
+			return JsonError("DEVICE_ADD: invalid parent bus path '" + parentPath + "'");
+		bool compatible = false;
+		for (uint32 i = 0; const char *type = bus->GetSupportedType(i); ++i) {
+			if (def->SupportsChildType(type)) {
+				compatible = true;
+				break;
+			}
+		}
+		if (!compatible)
+			return JsonError("DEVICE_ADD: device '" + tokens[1]
+				+ "' is not compatible with parent bus '" + parentPath + "'");
+	}
+
+	return SetDeviceEnabled(sim, tokens[1], true, settings, 3, true, bus, true);
 }
 
 std::string CmdDeviceSet(ATSimulator& sim, const std::vector<std::string>& tokens) {
@@ -2348,7 +2482,23 @@ std::string CmdDeviceSet(ATSimulator& sim, const std::vector<std::string>& token
 
 std::string CmdDeviceRemove(ATSimulator& sim, const std::vector<std::string>& tokens) {
 	if (tokens.size() != 2)
-		return JsonError("DEVICE_REMOVE: usage: DEVICE_REMOVE <tag>");
+		return JsonError("DEVICE_REMOVE: usage: DEVICE_REMOVE <tag-or-path>");
+
+	if (!tokens[1].empty() && tokens[1].front() == '/') {
+		ATDeviceManager *dm = sim.GetDeviceManager();
+		if (!dm)
+			return JsonError("DEVICE_REMOVE: device manager unavailable");
+		IATDevice *dev = dm->ParsePath(tokens[1].c_str()).mpDevice;
+		if (!dev)
+			return JsonError("DEVICE_REMOVE: invalid device path '" + tokens[1] + "'");
+		ATDeviceInfo info {};
+		dev->GetDeviceInfo(info);
+		if (info.mpDef && (info.mpDef->mFlags & kATDeviceDefFlag_Internal))
+			return JsonError("DEVICE_REMOVE: internal devices cannot be removed");
+		dm->RemoveDevice(dev);
+		ColdResetPreservingPause(sim);
+		return JsonOk("\"path\":\"" + JsonEscape(tokens[1]) + "\",\"reset\":true");
+	}
 
 	std::vector<std::string> empty;
 	return SetDeviceEnabled(sim, tokens[1], false, empty, 0, true);
@@ -2363,7 +2513,7 @@ std::string CmdDeviceClear(ATSimulator& sim, const std::vector<std::string>& tok
 		return JsonError("DEVICE_CLEAR: device manager unavailable");
 
 	bool changed = false;
-	for (IATDevice *dev : dm->GetDevices(true, true, false)) {
+	for (IATDevice *dev : dm->GetDevices(true, false, false)) {
 		if (!dev) continue;
 		ATDeviceInfo info {};
 		dev->GetDeviceInfo(info);

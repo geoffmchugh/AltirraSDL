@@ -66,6 +66,10 @@ struct ATDeviceDefinition {
 	const wchar_t *mpName;				// Readable name of device.
 	ATDeviceFactoryFn mpFactoryFn;		// Factory for creating device.
 	uint32 mFlags;						// ATDeviceDefFlag*
+	// Space-delimited compatible bus types, or null for a root device.
+	const char *mpChildTypes;
+
+	bool SupportsChildType(const char *type) const;
 };
 
 /// Dynamic information about a device instance (not a device type).

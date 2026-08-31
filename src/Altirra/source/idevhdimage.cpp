@@ -64,7 +64,7 @@ namespace {
 
 void ATCreateDeviceHardDiskVHDImage(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefIDEVHDImage = { "hdvhdimage", "harddisk", L"Hard disk image (VHD file)", ATCreateDeviceHardDiskVHDImage };
+extern const ATDeviceDefinition g_ATDeviceDefIDEVHDImage = { "hdvhdimage", "harddisk", L"Hard disk image (VHD file)", ATCreateDeviceHardDiskVHDImage, 0, "harddisk" };
 
 const uint8 kATVHDFooterSignature[8] = { 'c', 'o', 'n', 'e', 'c', 't', 'i', 'x' };
 const uint8 kATVHDDynamicHeaderSignature[8] = { 'c', 'x', 's', 'p', 'a', 'r', 's', 'e' };
