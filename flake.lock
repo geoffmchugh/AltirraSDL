@@ -3,11 +3,11 @@
     "altirrasdl-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1787806523,
-        "narHash": "sha256-HzT3oS0Z2cv4Oeoo6T5Dn6d8Cu4BBRyDOMmaxke8FW8=",
+        "lastModified": 1788265180,
+        "narHash": "sha256-qUtgUd0t4tqrcdVcaOG60g7UZis52XU/2xPEV+hd/QA=",
         "ref": "main",
-        "rev": "76f37e1c24748f3810ff87c6614d8e08070e25a6",
-        "revCount": 591,
+        "rev": "b3061c7356da2debe5596fc797408821499d37ca",
+        "revCount": 593,
         "type": "git",
         "url": "https://github.com/geoffmchugh/AltirraSDL"
       },

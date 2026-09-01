@@ -18,6 +18,12 @@
       ref = "docking";
       flake = false;
     };
+    # sdl3-src = {
+    #   url = "git+https://github.com/libsdl-org/SDL";
+    #   type = "git";
+    #   ref = "main";
+    #   flake = false;
+    # };
   };
 
   outputs = inputs@
@@ -53,6 +59,7 @@
               sdl3 sdl3-ttf sdl3-image sdl3-mixer sdl3-shadercross 
               cmake pkg-config ninja
               alsa-lib jack2 libpulseaudio pipewire sndio
+              ffmpeg x264
               wayland 
               libxkbcommon libx11 libxext libxcursor libxi libxfixes libxrandr libxscrnsaver libxtst libxcb libGL mesa
               libusb1 dbus 
@@ -74,13 +81,13 @@
               chmod -R u+w third_party
             '';
             configurePhase = ''
-              cmake . -DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui
+              cmake . -DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui -DALTIRRA_BRIDGE_SERVER=ON
             '';
             buildPhase = ''
               patchShebangs .
               # substituteInPlace makefile --replace-quiet '/sbin/ldconfig' 'ldconfig'
               # substituteInPlace makefile --replace-quiet 'grep -A 10' 'grep -A 100'
-              ./build.sh --release --system-sdl3 --cmake "-DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui"
+              ./build.sh --clean --release --system-sdl3 --cmake "-DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui -DALTIRRA_BRIDGE_SERVER=ON"
               # cmake --build . -j $NIX_BUILD_CORES;
             '';
             installPhase = ''
@@ -96,6 +103,7 @@
               mkdir -p $out/localconfig
 
               cp /build/source/build/linux-release/src/AltirraSDL/AltirraSDL $out/bin
+              cp /build/source/build/linux-release/src/AltirraBridgeServer/AltirraBridgeServer $out/bin
               cp -r dist/ $out/dist/
               cp -r localconfig $out/localconfig/
             '';
