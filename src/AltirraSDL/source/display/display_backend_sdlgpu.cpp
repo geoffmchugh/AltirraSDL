@@ -343,19 +343,31 @@ void DisplayBackendSDLGPU::RenderFrame(float dstX, float dstY, float dstW,
 
 	const VDDScreenMaskParams& mask = mScreenFX.mScreenMaskParams;
 	if (mask.mType != VDDScreenMaskType::None) {
-		const int effectW = std::max(1, (int)std::lround(physicalDstW));
-		const int effectH = std::max(1, (int)std::lround(physicalDstH));
+		// Snap both destination edges to the physical pixel grid. The screen
+		// mask is authored at one texel per physical output pixel, so its
+		// intermediate target must be composited back at exactly 1:1. Rounding
+		// only the width/height and then drawing to the original fractional
+		// rectangle makes SDL duplicate or discard a column, which is visible
+		// as a phase discontinuity in the aperture grille.
+		const int effectX = (int)std::lround(dstX * mRenderScaleX);
+		const int effectY = (int)std::lround(dstY * mRenderScaleY);
+		const int effectRight = (int)std::lround(
+			(dstX + dstW) * mRenderScaleX);
+		const int effectBottom = (int)std::lround(
+			(dstY + dstH) * mRenderScaleY);
+		const int effectW = std::max(1, effectRight - effectX);
+		const int effectH = std::max(1, effectBottom - effectY);
 		if (EnsureTarget(mpScreenFXLinear, mScreenFXW, mScreenFXH,
 				effectW, effectH)
-			&& EnsureScreenMask(dstX * mRenderScaleX,
-				dstY * mRenderScaleY, effectW, effectH, srcW))
+			&& EnsureScreenMask((float)effectX, (float)effectY,
+				effectW, effectH, srcW))
 		{
-			// The mask is authored at one texel per output pixel. Preserve that
-			// exact phase through the final destination draw, whose floating-point
-			// rectangle can otherwise trigger a tiny linear rescale and blur the
-			// phosphor pattern across adjacent pixels.
+			// Preserve the one-mask-texel-per-output-pixel relationship through
+			// the final composite.
 			SDL_SetTextureScaleMode(mpScreenFXLinear, SDL_SCALEMODE_NEAREST);
 			ShaderConstants preMask = constants;
+			preMask.sourceDestSize[2] = (float)effectW;
+			preMask.sourceDestSize[3] = (float)effectH;
 			preMask.passParams0[0] = 9.0f;
 			if (RenderPass(source, mpScreenFXLinear, preMask,
 					SDL_BLENDMODE_NONE, true)
@@ -370,7 +382,12 @@ void DisplayBackendSDLGPU::RenderFrame(float dstX, float dstY, float dstW,
 				{
 					SDL_SetTextureBlendMode(mpScreenFXLinear,
 						SDL_BLENDMODE_NONE);
-					const SDL_FRect rect { dstX, dstY, dstW, dstH };
+					const SDL_FRect rect {
+						effectX / mRenderScaleX,
+						effectY / mRenderScaleY,
+						effectW / mRenderScaleX,
+						effectH / mRenderScaleY
+					};
 					if (!SDL_RenderTexture(mpRenderer, mpScreenFXLinear,
 							nullptr, &rect))
 					{
@@ -481,21 +498,21 @@ bool DisplayBackendSDLGPU::EnsureScreenMask(float dstX, float dstY, int dstW,
 	mMaskBuffer.assign((size_t)dstW * textureH, 0);
 	switch (mask.mType) {
 		case VDDScreenMaskType::ApertureGrille: {
-			VDDisplayApertureGrilleParams params(mask, (float)mOutputW,
+			VDDisplayApertureGrilleParams params(mask, (float)dstW,
 				(float)srcW);
 			VDDisplayCreateApertureGrilleTexture(mMaskBuffer.data(), dstW,
 				dstX, params);
 			break;
 		}
 		case VDDScreenMaskType::SlotMask: {
-			VDDisplaySlotMaskParams params(mask, (float)mOutputW,
+			VDDisplaySlotMaskParams params(mask, (float)dstW,
 				(float)srcW);
 			VDDisplayCreateSlotMaskTexture(mMaskBuffer.data(), dstW * 4,
 				dstW, dstH, dstX, dstY, (float)dstW, (float)dstH, params);
 			break;
 		}
 		case VDDScreenMaskType::DotTriad: {
-			VDDisplayTriadDotMaskParams params(mask, (float)mOutputW,
+			VDDisplayTriadDotMaskParams params(mask, (float)dstW,
 				(float)srcW);
 			VDDisplayCreateTriadDotMaskTexture(mMaskBuffer.data(), dstW * 4,
 				dstW, dstH, dstX, dstY, (float)dstW, (float)dstH, params);
