@@ -1,0 +1,80 @@
+{
+  "nodes": {
+    "altirrasdl-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787806523,
+        "narHash": "sha256-HzT3oS0Z2cv4Oeoo6T5Dn6d8Cu4BBRyDOMmaxke8FW8=",
+        "ref": "main",
+        "rev": "76f37e1c24748f3810ff87c6614d8e08070e25a6",
+        "revCount": 591,
+        "type": "git",
+        "url": "https://github.com/geoffmchugh/AltirraSDL"
+      },
+      "original": {
+        "ref": "main",
+        "type": "git",
+        "url": "https://github.com/geoffmchugh/AltirraSDL"
+      }
+    },
+    "imgui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787139586,
+        "narHash": "sha256-6YiYqpWPHOtcHnhtSo/xDQqbYKe8HVjPiHxH5SdCxlw=",
+        "ref": "docking",
+        "rev": "fd13a1e8923a0a7077b404fc36fd063b25a0c0b5",
+        "revCount": 11872,
+        "type": "git",
+        "url": "https://github.com/ocornut/imgui"
+      },
+      "original": {
+        "ref": "docking",
+        "type": "git",
+        "url": "https://github.com/ocornut/imgui"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1788179007,
+        "narHash": "sha256-hn1oU2rue2SYK8dAr8+WNZWtbsz1S2W5mnHlSEuh3bo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "34ab99075ac4f7e40cf037eef32cb1c360bb85e9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs-stable": {
+      "locked": {
+        "lastModified": 1788187754,
+        "narHash": "sha256-bu1QxmXKmPuvBLN7bHP355OV9Qo13x9WCiRDH62CqRM=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "5dfba6236110080a54247d6460bc2ff5dda939cc",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-26.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "altirrasdl-src": "altirrasdl-src",
+        "imgui-src": "imgui-src",
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-stable": "nixpkgs-stable"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
