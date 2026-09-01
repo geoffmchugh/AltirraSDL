@@ -22,7 +22,7 @@
 
 void ATCreateDeviceLoopback(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefLoopback = { "loopback", nullptr, L"Loopback", ATCreateDeviceLoopback };
+extern const ATDeviceDefinition g_ATDeviceDefLoopback = { "loopback", nullptr, L"Loopback", ATCreateDeviceLoopback, 0, "serial" };
 
 class ATLoopbackDevice final : public ATDevice
 					, public IATDeviceSerial

@@ -23,7 +23,7 @@
 
 void ATCreateDeviceHardDiskRawImage(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefIDERawImage = { "hdrawimage", "harddisk", L"Hard disk image (raw file)", ATCreateDeviceHardDiskRawImage };
+extern const ATDeviceDefinition g_ATDeviceDefIDERawImage = { "hdrawimage", "harddisk", L"Hard disk image (raw file)", ATCreateDeviceHardDiskRawImage, 0, "harddisk" };
 
 ATIDERawImage::ATIDERawImage()
 	: mSectorCount(0)

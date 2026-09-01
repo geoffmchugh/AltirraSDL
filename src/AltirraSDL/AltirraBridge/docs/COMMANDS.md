@@ -198,6 +198,8 @@ Device commands:
 ```python
 a.device_list()
 a.device_get("vbxe")
+a.device_add("printer", parent="/", translation_mode="default")
+a.device_add("fx80", parent="/printer/parport", auto_lf=True, intl_mode=1)
 a.device_set("vbxe", True, version=126, base="d600")
 a.device_set("soundboard", True, version=120, base="d2c0")
 a.device_remove("rapidus")
@@ -205,7 +207,8 @@ a.device_clear()
 ```
 
 Wire form is token-based: `DEVICE_SET vbxe on version=126 base=d600`.
-Device option values must not contain spaces.
+Quote a complete `key=value` token when a value contains spaces, for example
+`DEVICE_SET custom on "path=C:\My Devices\probe.atdevice"`.
 `DEVICE_GET` reports `healthy` and a `diagnostics` array for installed
 devices. Custom-device descriptor load or compilation failures make
 `DEVICE_SET` fail while retaining the device for hot reload; the error response

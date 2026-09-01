@@ -22,7 +22,7 @@
 
 void ATCreateDeviceParallelToSerial(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefParallelToSerial = { "par2ser", nullptr, L"Parallel to serial adapter", ATCreateDeviceParallelToSerial };
+extern const ATDeviceDefinition g_ATDeviceDefParallelToSerial = { "par2ser", nullptr, L"Parallel to serial adapter", ATCreateDeviceParallelToSerial, 0, "parallel" };
 
 class ATDeviceParallelToSerial final : public ATDeviceT<IATDeviceParent, IATPrinterOutput>
 {

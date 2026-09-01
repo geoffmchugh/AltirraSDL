@@ -2032,7 +2032,7 @@ void ATCreateDevicePrinter825(const ATPropertySet& pset, IATDevice **dev) {
 	*dev = p.release();
 }
 
-extern const ATDeviceDefinition g_ATDeviceDefPrinter825 = { "825", nullptr, L"825 80-Column Printer", ATCreateDevicePrinter825 };
+extern const ATDeviceDefinition g_ATDeviceDefPrinter825 = { "825", nullptr, L"825 80-Column Printer", ATCreateDevicePrinter825, 0, "parallel" };
 
 ATDevicePrinter825::ATDevicePrinter825() {
 	SetSaveStateAgnostic();

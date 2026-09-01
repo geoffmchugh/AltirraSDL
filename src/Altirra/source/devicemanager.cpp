@@ -66,6 +66,11 @@ IATDevice *ATDeviceManager::AddDevice(const ATDeviceDefinition *def, const ATPro
 }
 
 void ATDeviceManager::AddDevice(IATDevice *dev, bool child) {
+	ATDeviceInfo info;
+	dev->GetDeviceInfo(info);
+	if (!child && info.mpDef && info.mpDef->mpChildTypes)
+		throw MyError("Device '%s' requires a parent bus", info.mpDef->mpTag);
+
 	try {
 		mInterfaceListCache.clear();
 
@@ -73,9 +78,6 @@ void ATDeviceManager::AddDevice(IATDevice *dev, bool child) {
 
 		for(const auto& fn : mInitHandlers)
 			fn(*dev);
-
-		ATDeviceInfo info;
-		dev->GetDeviceInfo(info);
 
 		DeviceEntry ent = {
 			.mpDevice = dev,
@@ -228,12 +230,12 @@ ATParsedDevicePath ATDeviceManager::ParsePath(const char *path) const {
 
 		const char *nameStart = path;
 
-		if (!isalnum((unsigned char)*path))
+		if (!*path || *path == '/' || *path == '.')
 			return {};
 
 		++path;
 
-		while(isalnum((unsigned char)*path))
+		while(*path && *path != '/' && *path != '.')
 			++path;
 
 		const char *nameEnd = path;
@@ -246,11 +248,15 @@ ATParsedDevicePath ATDeviceManager::ParsePath(const char *path) const {
 				return {};
 
 			do {
+				const uint32 digit = (uint32)(*path - '0');
+				if (index > (UINT32_MAX - digit) / 10)
+					return {};
+				index = index * 10 + digit;
 				++path;
 			} while(isdigit((unsigned char)*path));
 		}
 
-		if (*path)
+		if (*path && *path != '/')
 			return {};
 
 		return { VDStringSpanA(nameStart, nameEnd), index };
@@ -282,7 +288,17 @@ ATParsedDevicePath ATDeviceManager::ParsePath(const char *path) const {
 				}
 			}
 		} else {
-			dev = GetDeviceByTag(VDStringA(deviceComponent.first).c_str(), deviceComponent.second);
+			uint32 matchIndex = deviceComponent.second;
+			for (IATDevice *rootDev : GetDevices(true, false, false)) {
+				ATDeviceInfo info;
+				rootDev->GetDeviceInfo(info);
+
+				if (deviceComponent.first == info.mpDef->mpTag && !matchIndex--) {
+					dev = rootDev;
+					break;
+				}
+			}
+
 			if (!dev)
 				break;
 		}
@@ -300,20 +316,23 @@ ATParsedDevicePath ATDeviceManager::ParsePath(const char *path) const {
 		if (!parent)
 			break;
 
+		bus = nullptr;
 		for(busIndex = 0; ; ++busIndex) {
 			auto busId = parent->GetDeviceBusIdByIndex(busIndex);
 			if (busId < 0)
 				break;
 
-			bus = parent->GetDeviceBusById(busId);
-			if (!bus) {
+			IATDeviceBus *candidateBus = parent->GetDeviceBusById(busId);
+			if (!candidateBus) {
 				VDFAIL("Device returned bus ID that failed to resolve");
 				continue;
 			}
 
-			if (busComponent.first == bus->GetBusTag()) {
-				if (!busComponent.second--)
+			if (busComponent.first == candidateBus->GetBusTag()) {
+				if (!busComponent.second--) {
+					bus = candidateBus;
 					break;
+				}
 			}
 		}
 

@@ -95,10 +95,10 @@ hundred-kilobyte responses; client implementations must read until
 ## Commands
 
 Commands are space-separated tokens: a verb in uppercase followed by
-zero or more arguments. Quoting/escaping for arguments containing
-spaces is **not** supported in v1; commands that need binary or
-spaces use base64 inline payloads or `path:`-on-server arguments
-(introduced in later phases).
+zero or more arguments. Single or double quotes may surround all or part
+of a token. Inside double quotes, escape `"` and `\` as `\"` and `\\`;
+other backslashes are preserved so Windows paths work naturally. Binary
+payloads still use base64 rather than quoted tokens.
 
 Numeric arguments accept three forms:
 
@@ -559,10 +559,8 @@ the read command. Typical cold XEX boots need hundreds of frames; use
 {"ok":true,"path":"/path/to/game.xex"}
 ```
 
-Path tokenisation note: until quoted-string parsing arrives in
-Phase 5, paths containing spaces work via the bridge re-joining
-trailing tokens with single spaces — but only one consecutive
-space is preserved. Stick to space-free paths for reliability.
+Quote paths containing spaces to preserve them exactly. The legacy
+unquoted form remains supported by re-joining trailing path tokens.
 
 #### `MOUNT drive path`
 
@@ -642,8 +640,8 @@ specific snapshot.
 
 Write the snapshot to a server-side `.altstate2` file. The
 positional form is backward-compatible with the v1 wire protocol;
-the `path=` form is the new explicit syntax. Paths containing
-spaces are only supported via the positional form.
+the `path=` form is the new explicit syntax. Quote either form when
+the path contains spaces.
 
 ```json
 {"ok":true,"mode":"path","path":"/tmp/state.altstate2",
@@ -781,26 +779,44 @@ reset with pause-state preservation (same semantics as `COLD_RESET`).
 
 #### `DEVICE_LIST`
 
-List installed top-level devices and bridge quick-add device tags.
+List the complete installed device tree and bridge quick-add device tags.
+Each installed entry includes its stable instance path, including children.
 
 ```json
-{"ok":true,"installed":[{"tag":"vbxe","name":"VideoBoard XE"}],
+{"ok":true,"installed":[{"tag":"vbxe","name":"VideoBoard XE","path":"/vbxe"}],
  "quick":[{"tag":"vbxe","present":true,"reboot_on_plug":false}]}
 ```
 
-#### `DEVICE_GET tag`
+#### `DEVICE_GET tag-or-path`
 
-Query a device by tag. `settings` is an object containing the device's
+Query a root device by tag or an exact instance by path. `settings` is an object containing the device's
 current `ATPropertySet` values when the device is present. `healthy` reports
 whether the device currently has any diagnostics; `diagnostics` contains the
 human-readable messages. Custom devices also report `config_loaded`, which is
 independent of runtime diagnostics such as a disconnected network endpoint.
+Every present device also reports its stable tree `path`. Use paths to
+disambiguate multiple instances or child devices.
 
 ```json
 {"ok":true,"tag":"vbxe","known":true,"present":true,"reset":false,
  "settings":{"version":126,"alt_page":true},"healthy":true,
  "diagnostics":[]}
 ```
+
+#### `DEVICE_ADD tag parent=bus-path|/ [key=value...]`
+
+Add a new device at an explicit location. `/` selects the device-tree root;
+child buses use paths reported by `DEVICE_LIST`, for example:
+
+```
+DEVICE_ADD printer parent=/ translation_mode=default
+DEVICE_ADD fx80 parent=/printer/parport auto_lf=1 intl_mode=1
+```
+
+The response includes the new instance's path. Child-only device types are
+rejected at the root, preventing a device such as `fx80` from being installed
+in a non-functional location. The selected bus performs the final compatibility
+check and rejects devices that it cannot attach.
 
 #### `DEVICE_SET tag on|off [key=value...]`
 
@@ -820,16 +836,19 @@ DEVICE_SET covox on base=d600 size=100 channels=4
 DEVICE_SET rapidus off
 ```
 
-Option tokens are whitespace-separated `key=value` pairs; values cannot
-contain spaces. Successful device changes cold-reset the machine while
-preserving pause state and report `"reset":true`. If the device reports a
+Option tokens are whitespace-separated `key=value` pairs. Enclose a token in
+single or double quotes when its value contains spaces; inside double quotes,
+escape `"` and `\` as `\"` and `\\`. Successful device changes cold-reset
+the machine while preserving pause state and report `"reset":true`. Custom
+devices accept only `path`, `hotreload`, and `allowunsafe`; unknown options are
+rejected. If the device reports a
 descriptor load or compilation error after it is added or reconfigured, the
 response has `"ok":false` and includes the device payload and its
 `diagnostics`. The device remains present so that hot reload and subsequent
 reconfiguration can recover it without first removing it. Runtime diagnostics
 do not fail `DEVICE_SET`; inspect `healthy` and `diagnostics` to detect them.
 
-#### `DEVICE_REMOVE tag` / `DEVICE_CLEAR`
+#### `DEVICE_REMOVE tag-or-path` / `DEVICE_CLEAR`
 
 Remove one non-internal device, or all non-internal devices. Both
 preserve pause state and cold-reset when anything changes.
@@ -1071,9 +1090,8 @@ breakpoint id.
 ```
 
 The condition runs through Altirra's expression evaluator (same
-syntax as `EVAL`). The condition value cannot contain spaces;
-clients should avoid space-bearing expressions until quoted-token
-support arrives.
+syntax as `EVAL`). Quote the complete `condition=EXPR` token when the
+expression contains spaces.
 
 #### `BP_CLEAR id`
 
@@ -1305,8 +1323,8 @@ Phases 1 through 5b are in `v1`. The remaining gaps (deferred to
 
 - **Tracepoints with format strings** — `BP_SET ... action=log
   format="A=%a"`. Altirra supports this internally
-  (`mbContinueExecution=true` + `mpCommand`); the bridge needs a
-  tokenizer that handles quoted format strings.
+  (`mbContinueExecution=true` + `mpCommand`); the bridge still needs
+  command handling for tracepoint actions and format strings.
 - **`SIO_TRACE on|off|log`** — Altirra's SIO trace toggle is private
   to the debugger implementation; needs a `QueueCommand(".siotrace")`
   dispatch path or a public API addition.

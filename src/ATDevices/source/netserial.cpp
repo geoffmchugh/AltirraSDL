@@ -24,7 +24,7 @@
 
 void ATCreateDeviceNetSerial(const ATPropertySet& pset, IATDevice **dev);
 
-extern const ATDeviceDefinition g_ATDeviceDefNetSerial = { "netserial", "netserial", L"Networked serial port", ATCreateDeviceNetSerial };
+extern const ATDeviceDefinition g_ATDeviceDefNetSerial = { "netserial", "netserial", L"Networked serial port", ATCreateDeviceNetSerial, 0, "serial" };
 
 class ATDeviceNetSerial final : public ATDeviceT<IATDeviceSerial>
 {

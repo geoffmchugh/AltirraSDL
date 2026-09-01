@@ -47,11 +47,13 @@ std::string JsonOk(const std::string& extraPayload);
 std::string JsonError(const std::string& msg);
 std::string JsonError(const std::string& msg, const std::string& extraPayload);
 
-// Tokenise a command line at whitespace. Empty tokens are dropped.
-// Quoted-string tokens are NOT supported in v1 — Phase 1 commands take
-// only bare argument tokens. Whitespace inside an argument requires
-// inline-base64 encoding or a path: argument (added in later phases).
-std::vector<std::string> TokenizeCommand(const std::string& line);
+// Tokenise a command line at whitespace. Empty tokens are dropped. Single
+// and double quotes may surround a token; inside double quotes,
+// backslash escapes a quote or another backslash. Other backslashes are kept
+// verbatim so quoted Windows paths do not need excessive escaping.
+// Returns false with a human-readable error for unterminated quotes or escapes.
+bool TokenizeCommand(const std::string& line, std::vector<std::string>& tokens,
+	std::string& error);
 
 // Parse a hex or decimal integer (e.g. "60", "0x3c", "$3c"). Returns
 // false on parse failure. Accepts uppercase and lowercase. The Atari

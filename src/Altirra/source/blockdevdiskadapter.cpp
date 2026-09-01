@@ -157,7 +157,9 @@ extern constexpr ATDeviceDefinition g_ATDeviceDefBlockDevVSDFS = {
 	"hdvirtsdfs",
 	"hdvirtsdfs",
 	L"Virtual SDFS hard disk",
-	ATCreateDeviceBlockDevVirtSDFS
+	ATCreateDeviceBlockDevVirtSDFS,
+	0,
+	"harddisk"
 };
 
 ATBlockDeviceVirtSDFS::ATBlockDeviceVirtSDFS() {

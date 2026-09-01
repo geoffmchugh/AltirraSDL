@@ -211,7 +211,7 @@ bool ShouldLogCommand(const std::string& verb) {
 		|| verb == "WARM_RESET" || verb == "FRESH"
 		|| verb == "STATE_SAVE" || verb == "STATE_LOAD"
 		|| verb == "STATE_DROP" || verb == "CONFIG"
-		|| verb == "DEVICE_SET" || verb == "DEVICE_REMOVE"
+		|| verb == "DEVICE_ADD" || verb == "DEVICE_SET" || verb == "DEVICE_REMOVE"
 		|| verb == "DEVICE_CLEAR"
 		|| verb == "SCREENSHOT" || verb == "RAWSCREEN"
 		|| verb == "RENDER_FRAME" || verb == "PALETTE_LOAD_ACT"
@@ -249,7 +249,10 @@ void LogCommandStart(const std::vector<std::string>& tokens) {
 }
 
 std::string DispatchCommand(const std::string& line, ATSimulator& sim) {
-	auto tokens = TokenizeCommand(line);
+	std::vector<std::string> tokens;
+	std::string tokenError;
+	if (!TokenizeCommand(line, tokens, tokenError))
+		return JsonError("invalid command syntax: " + tokenError);
 	if (tokens.empty())
 		return JsonError("empty command");
 
@@ -366,6 +369,7 @@ std::string DispatchCommand(const std::string& line, ATSimulator& sim) {
 	if (verb == "CONFIG")     return CmdConfig(sim, tokens);
 	if (verb == "DEVICE_LIST")   return CmdDeviceList(sim, tokens);
 	if (verb == "DEVICE_GET")    return CmdDeviceGet(sim, tokens);
+	if (verb == "DEVICE_ADD")    return CmdDeviceAdd(sim, tokens);
 	if (verb == "DEVICE_SET")    return CmdDeviceSet(sim, tokens);
 	if (verb == "DEVICE_REMOVE") return CmdDeviceRemove(sim, tokens);
 	if (verb == "DEVICE_CLEAR")  return CmdDeviceClear(sim, tokens);

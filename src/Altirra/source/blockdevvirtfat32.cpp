@@ -45,14 +45,18 @@ extern const ATDeviceDefinition g_ATDeviceDefBlockDevVFAT16 = {
 	"hdvirtfat16",
 	"hdvirtfat16",
 	L"Virtual FAT16 hard disk",
-	ATCreateDeviceBlockDevVFAT16
+	ATCreateDeviceBlockDevVFAT16,
+	0,
+	"harddisk"
 };
 
 extern const ATDeviceDefinition g_ATDeviceDefBlockDevVFAT32 = {
 	"hdvirtfat32",
 	"hdvirtfat32",
 	L"Virtual FAT32 hard disk",
-	ATCreateDeviceBlockDevVFAT32
+	ATCreateDeviceBlockDevVFAT32,
+	0,
+	"harddisk"
 };
 
 ATBlockDeviceVFAT32::ATBlockDeviceVFAT32(bool useFAT16)

@@ -69,22 +69,67 @@ std::string JsonError(const std::string& msg, const std::string& extraPayload) {
 	return out;
 }
 
-std::vector<std::string> TokenizeCommand(const std::string& line) {
-	std::vector<std::string> tokens;
+bool TokenizeCommand(const std::string& line, std::vector<std::string>& tokens,
+	std::string& error)
+{
+	tokens.clear();
+	error.clear();
 	std::string cur;
-	for (char c : line) {
-		if (c == ' ' || c == '\t' || c == '\r') {
-			if (!cur.empty()) {
+	char quote = 0;
+	bool tokenStarted = false;
+
+	for (size_t i = 0; i < line.size(); ++i) {
+		const char c = line[i];
+
+		if (!quote && (c == ' ' || c == '\t' || c == '\r')) {
+			if (tokenStarted) {
 				tokens.push_back(cur);
 				cur.clear();
 			}
-		} else {
-			cur += c;
+			tokenStarted = false;
+			continue;
 		}
+
+		if (c == '\'' || c == '"') {
+			if (!quote && !tokenStarted) {
+				quote = c;
+				tokenStarted = true;
+				continue;
+			}
+
+			if (quote == c) {
+				quote = 0;
+				continue;
+			}
+		}
+
+		if (quote == '"' && c == '\\') {
+			if (i + 1 >= line.size()) {
+				error = "unterminated escape in quoted argument";
+				return false;
+			}
+
+			const char next = line[i + 1];
+			if (next == '"' || next == '\\') {
+				cur += next;
+				++i;
+				continue;
+			}
+		}
+
+		cur += c;
+		tokenStarted = true;
 	}
-	if (!cur.empty())
+
+	if (quote) {
+		error = "unterminated quoted argument";
+		return false;
+	}
+
+	if (tokenStarted)
 		tokens.push_back(cur);
-	return tokens;
+
+	return true;
 }
 
 // ---------------------------------------------------------------------------

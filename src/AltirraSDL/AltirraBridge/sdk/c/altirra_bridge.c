@@ -452,6 +452,22 @@ int atb_device_get(atb_client_t* c, const char* tag) {
 	return rc;
 }
 
+int atb_device_add(atb_client_t* c, const char* tag, const char* parent,
+		const char* options) {
+	if (!tag || !*tag || !parent || !*parent) return ATB_ERR_BAD_ARG;
+	size_t cmd_size = 32 + strlen(tag) + strlen(parent)
+		+ (options ? strlen(options) : 0);
+	char* cmd = (char*)malloc(cmd_size);
+	if (!cmd) { atb_set_error(c, "out of memory"); return ATB_ERR_NETWORK; }
+	if (options && *options)
+		snprintf(cmd, cmd_size, "DEVICE_ADD %s parent=%s %s", tag, parent, options);
+	else
+		snprintf(cmd, cmd_size, "DEVICE_ADD %s parent=%s", tag, parent);
+	int rc = atb_simple_cmd(c, cmd);
+	free(cmd);
+	return rc;
+}
+
 int atb_device_set(atb_client_t* c, const char* tag, int enabled, const char* options) {
 	if (!tag || !*tag) return ATB_ERR_BAD_ARG;
 	const char* state = enabled ? "on" : "off";

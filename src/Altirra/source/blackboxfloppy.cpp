@@ -50,7 +50,7 @@ void ATCreateDeviceBlackBoxFloppyEmulator(const ATPropertySet& pset, IATDevice *
 	*dev = p.release();
 }
 
-extern constexpr ATDeviceDefinition g_ATDeviceDefBlackBoxFloppy = { "blackboxfloppy", "blackboxfloppy", L"Black Box Floppy Board", ATCreateDeviceBlackBoxFloppyEmulator };
+extern constexpr ATDeviceDefinition g_ATDeviceDefBlackBoxFloppy = { "blackboxfloppy", "blackboxfloppy", L"Black Box Floppy Board", ATCreateDeviceBlackBoxFloppyEmulator, 0, "blackboxfloppy" };
 
 ATBlackBoxFloppyEmulator::ATBlackBoxFloppyEmulator() {
 }

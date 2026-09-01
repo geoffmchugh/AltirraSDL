@@ -217,6 +217,8 @@ type
     function  ConfigSet(const Key, Value: String): String;
     function  DeviceList: String;
     function  DeviceGet(const Tag: String): String;
+    function  DeviceAdd(const Tag, Parent: String;
+      const Options: String = ''): String;
     function  DeviceSet(const Tag: String; Enabled: Boolean;
       const Options: String = ''): String;
     function  DeviceRemove(const Tag: String): String;
@@ -964,6 +966,17 @@ function TAltirraBridge.DeviceGet(const Tag: String): String;
 begin
   Result := Rpc('DEVICE_GET ' + Tag);
   CheckOk(Result, 'DEVICE_GET');
+end;
+
+function TAltirraBridge.DeviceAdd(const Tag, Parent: String;
+  const Options: String): String;
+var
+  Cmd: String;
+begin
+  Cmd := 'DEVICE_ADD ' + Tag + ' parent=' + Parent;
+  if Options <> '' then Cmd := Cmd + ' ' + Options;
+  Result := Rpc(Cmd);
+  CheckOk(Result, 'DEVICE_ADD');
 end;
 
 function TAltirraBridge.DeviceSet(const Tag: String; Enabled: Boolean;

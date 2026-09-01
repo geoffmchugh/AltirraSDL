@@ -67,6 +67,9 @@ static void FindCompatibleParentBus(ATDeviceManager *devMgr, const char *tag,
 	outBusId = -1;
 	if (!devMgr || !tag)
 		return;
+	const ATDeviceDefinition *def = devMgr->GetDeviceDefinition(tag);
+	if (!def || !def->mpChildTypes)
+		return;
 
 	for (IATDevice *dev : devMgr->GetDevices(false, false, false)) {
 		auto *parent = vdpoly_cast<IATDeviceParent *>(dev);
@@ -86,10 +89,19 @@ static void FindCompatibleParentBus(ATDeviceManager *devMgr, const char *tag,
 				const char *s = bus->GetSupportedType(ti);
 				if (!s)
 					break;
-				if (!strcmp(s, tag)) {
-					outParent = dev;
-					outBusId = busId;
-					return;
+				if (def->SupportsChildType(s)) {
+					if (!outParent) {
+						outParent = dev;
+						outBusId = busId;
+					}
+
+					vdfastvector<IATDevice *> children;
+					bus->GetChildDevices(children);
+					if (children.empty()) {
+						outParent = dev;
+						outBusId = busId;
+						return;
+					}
 				}
 			}
 		}
@@ -331,6 +343,7 @@ void ATUIRenderDeviceConfig(ATDeviceManager *devMgr) {
 					sint32 busId = s_pendingAddBusId;
 					VDStringA tag = s_pendingAddTag;
 					ClearPendingAdd();
+					IATDevice *dev = nullptr;
 
 					try {
 						const ATDeviceDefinition *def = mgr->GetDeviceDefinition(tag.c_str());
@@ -338,20 +351,26 @@ void ATUIRenderDeviceConfig(ATDeviceManager *devMgr) {
 							throw MyError("Unknown device type: %s", tag.c_str());
 
 						const bool childMode = (parentDev != nullptr);
-						IATDevice *dev = mgr->AddDevice(def, g_devCfg.props, childMode);
+						dev = mgr->AddDevice(def, g_devCfg.props, childMode);
 
 						if (dev && childMode) {
 							auto *parent = vdpoly_cast<IATDeviceParent *>(parentDev);
-							if (parent) {
-								IATDeviceBus *bus = parent->GetDeviceBusById(busId);
-								if (bus)
-									bus->AddChildDevice(dev);
-							}
+							IATDeviceBus *bus = parent ? parent->GetDeviceBusById(busId) : nullptr;
+							if (!bus)
+								throw MyError("The selected parent bus is no longer available");
+
+							bus->AddChildDevice(dev);
+							if (!dev->GetParent())
+								throw MyError("The selected parent bus rejected device '%s'", tag.c_str());
 						}
 					} catch (const MyError& e) {
+						if (dev)
+							mgr->RemoveDevice(dev);
 						LOG_ERROR("UI", "Failed to add device: %s: %s", tag.c_str(), e.c_str());
 						ATUIShowError2(nullptr, e.wc_str(), L"Unable to add device");
 					} catch (...) {
+						if (dev)
+							mgr->RemoveDevice(dev);
 						LOG_ERROR("UI", "Failed to add device: %s", tag.c_str());
 						ATUIShowError2(nullptr, L"An unknown error occurred.",
 							L"Unable to add device");

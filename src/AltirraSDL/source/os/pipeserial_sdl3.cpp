@@ -47,7 +47,8 @@
 void ATCreateDevicePipeSerial(const ATPropertySet& pset, IATDevice **dev);
 
 extern const ATDeviceDefinition g_ATDeviceDefPipeSerial = {
-	"pipeserial", "pipeserial", L"Named pipe serial port", ATCreateDevicePipeSerial
+	"pipeserial", "pipeserial", L"Named pipe serial port", ATCreateDevicePipeSerial,
+	0, "serial"
 };
 
 namespace {

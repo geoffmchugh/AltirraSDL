@@ -54,5 +54,14 @@ with AltirraBridge.from_token_file("/tmp/altirra-bridge-12345.token") as a:
     a.boot("demo.xex")
 ```
 
+Add nested peripherals with an explicit parent bus:
+
+```python
+with AltirraBridge.from_token_file("/tmp/altirra-bridge-12345.token") as a:
+    a.device_add("printer", parent="/")
+    a.device_add("fx80", parent="/printer/parport",
+                 auto_lf=True, intl_mode=1)
+```
+
 See `examples/` for runnable scripts and `docs/PROTOCOL.md` (in the
 parent AltirraBridge directory) for the full wire contract.

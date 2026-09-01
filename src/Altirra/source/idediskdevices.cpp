@@ -73,4 +73,4 @@ void ATCreateDeviceHardDisk(const ATPropertySet& pset, IATDevice **dev) {
 	return ATCreateDeviceHardDiskRawImage(pset, dev);
 }
 
-extern const ATDeviceDefinition g_ATDeviceDefHardDisks = { "harddisk", "harddisk", L"Hard disk", ATCreateDeviceHardDisk };
+extern const ATDeviceDefinition g_ATDeviceDefHardDisks = { "harddisk", "harddisk", L"Hard disk", ATCreateDeviceHardDisk, 0, "harddisk" };

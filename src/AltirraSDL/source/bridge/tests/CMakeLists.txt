@@ -11,3 +11,15 @@ target_compile_features(altirra-bridge-pokey-audio-test PRIVATE cxx_std_17)
 
 add_test(NAME bridge-pokey-audio
 	COMMAND altirra-bridge-pokey-audio-test)
+
+if(TARGET AltirraBridgeServer)
+	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+	add_test(NAME bridge-custom-device
+		COMMAND ${Python3_EXECUTABLE}
+			${CMAKE_CURRENT_SOURCE_DIR}/bridge_custom_device_test.py
+			$<TARGET_FILE:AltirraBridgeServer>
+			${CMAKE_SOURCE_DIR}/src/AltirraSDL/AltirraBridge/sdk/python)
+	set_tests_properties(bridge-custom-device PROPERTIES
+		TIMEOUT 30
+		ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()

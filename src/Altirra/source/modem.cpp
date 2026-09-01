@@ -68,7 +68,7 @@ void ATCreateDeviceModem(const ATPropertySet& pset, IATDevice **dev) {
 	(*dev)->AddRef();
 }
 
-extern const ATDeviceDefinition g_ATDeviceDefModem = { "modem", "modem", L"Modem", ATCreateDeviceModem };
+extern const ATDeviceDefinition g_ATDeviceDefModem = { "modem", "modem", L"Modem", ATCreateDeviceModem, 0, "serial" };
 
 ATModemRegisters::ATModemRegisters()
 	: mAutoAnswerRings(0)

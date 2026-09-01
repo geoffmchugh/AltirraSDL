@@ -29,7 +29,9 @@ extern const ATDeviceDefinition g_ATDeviceDefVideoGenerator {
 		vdrefptr<ATDeviceVideoGenerator> devp(new ATDeviceVideoGenerator);
 		
 		*dev = devp.release();
-	}
+	},
+	0,
+	"videosource"
 };
 
 ATDeviceVideoGenerator::ATDeviceVideoGenerator() {

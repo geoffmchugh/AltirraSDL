@@ -110,6 +110,16 @@ class RemoteError(BridgeError):
         self.response = response if response is not None else {}
 
 
+def _quote_token(value: Any) -> str:
+    """Encode one command token without changing its UTF-8 contents."""
+    text = str(value)
+    if "\n" in text or "\r" in text:
+        raise ValueError("bridge command values cannot contain newlines")
+    if text and not any(c.isspace() or c in '\\"\'' for c in text):
+        return text
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 class AltirraBridge:
     """Connection to a running AltirraSDL --bridge instance.
 
@@ -760,30 +770,46 @@ class AltirraBridge:
         return self._cmd_ok("DEVICE_LIST")
 
     def device_get(self, tag: str) -> dict:
-        """Return presence, settings, health, and diagnostics for one tag."""
-        return self._cmd_ok(f"DEVICE_GET {tag}")
+        """Return presence, settings, health, and diagnostics for a tag or
+        stable device-tree path returned by :meth:`device_list`."""
+        return self._cmd_ok("DEVICE_GET " + _quote_token(tag))
+
+    def device_add(self, tag: str, parent: str = "/", **settings) -> dict:
+        """Add a new device at an explicit device-tree location.
+
+        ``parent="/"`` selects the root. Child devices use a bus path such
+        as ``/printer/parport``. The returned ``path`` uniquely identifies
+        the new instance for later queries, updates, or removal.
+        """
+        opts = [_quote_token(f"parent={parent}")]
+        for key, value in settings.items():
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            opts.append(_quote_token(f"{key}={value}"))
+        return self._cmd_ok(
+            f"DEVICE_ADD {_quote_token(tag)} " + " ".join(opts))
 
     def device_set(self, tag: str, enabled: bool = True, **settings) -> dict:
         """Add/reconfigure or remove a device.
 
-        Settings are encoded as ``key=value`` tokens, so values must not
-        contain whitespace. Common quick tags include ``vbxe``, ``covox``,
-        ``soundboard``, ``rapidus``, and ``slightsid``. Descriptor load or
-        compilation errors for custom devices raise :class:`RemoteError`;
-        the exception's ``response`` retains device diagnostics.
+        Settings are encoded as quoted ``key=value`` tokens. Common quick
+        tags include ``vbxe``, ``covox``, ``soundboard``, ``rapidus``, and
+        ``slightsid``. Descriptor load or compilation errors for custom
+        devices raise :class:`RemoteError`; the exception's ``response``
+        retains device diagnostics.
         """
         state = "on" if enabled else "off"
         opts = []
         for key, value in settings.items():
             if isinstance(value, bool):
                 value = "true" if value else "false"
-            opts.append(f"{key}={value}")
+            opts.append(_quote_token(f"{key}={value}"))
         suffix = (" " + " ".join(opts)) if opts else ""
         return self._cmd_ok(f"DEVICE_SET {tag} {state}{suffix}")
 
     def device_remove(self, tag: str) -> dict:
-        """Remove one non-internal device by tag."""
-        return self._cmd_ok(f"DEVICE_REMOVE {tag}")
+        """Remove one non-internal device by tag or device-tree path."""
+        return self._cmd_ok("DEVICE_REMOVE " + _quote_token(tag))
 
     def device_clear(self) -> dict:
         """Remove all non-internal devices."""
@@ -960,13 +986,11 @@ class AltirraBridge:
         PC. Returns the assigned breakpoint id.
 
         The condition runs through Altirra's expression evaluator
-        (same syntax as :meth:`eval_expr`). The condition token must
-        not contain spaces — wrap complex conditions in parentheses
-        or use a helper variable.
+        (same syntax as :meth:`eval_expr`).
         """
         cmd = f"BP_SET ${addr:x}"
         if condition is not None:
-            cmd += f" condition={condition}"
+            cmd += " " + _quote_token(f"condition={condition}")
         return int(self._cmd_ok(cmd)["id"])
 
     def bp_clear(self, bp_id: int) -> dict:

@@ -171,6 +171,8 @@ int atb_config_get(atb_client_t* c, const char* key /* NULL for all */);
 int atb_config_set(atb_client_t* c, const char* key, const char* value);
 int atb_device_list(atb_client_t* c);
 int atb_device_get(atb_client_t* c, const char* tag);
+int atb_device_add(atb_client_t* c, const char* tag, const char* parent,
+                   const char* options /* e.g. "auto_lf=1" or NULL */);
 int atb_device_set(atb_client_t* c, const char* tag, int enabled,
                    const char* options /* e.g. "version=126 base=d600" or NULL */);
 int atb_device_remove(atb_client_t* c, const char* tag);

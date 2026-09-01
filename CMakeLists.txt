@@ -25,6 +25,7 @@ add_compile_definitions(AT_SDL3_PORTABLE=1)
 
 include(FetchContent)
 include(ExternalProject)
+include(cmake/altirra_sdl3_linux_deps.cmake)
 
 # Self-heal stale FetchContent subbuild caches when the generator
 # changes between CMake runs.  Without this, a user upgrading
@@ -127,9 +128,22 @@ endif()
 # ALTIRRA_FETCH_SDL3 — force-fetch SDL3 from source instead of looking
 # for a system install.  Use this when find_package(SDL3) picks up a
 # broken or incompatible system SDL3 (e.g. an old SDL3 lying around in
-# /usr/local from a previous source build).  Default OFF: prefer system
-# SDL3 when available, fall back to FetchContent when it isn't.
+# /usr/local from a previous source build). This independent override defaults
+# OFF, but the default static desktop configuration enables it below.
 option(ALTIRRA_FETCH_SDL3 "Always fetch SDL3 from source (skip find_package)" OFF)
+
+# ALTIRRA_REQUIRE_SYSTEM_SDL3 — require an installed SDL instead of falling
+# back to FetchContent. This is useful to distro packagers and to developers
+# who want the distro's SDL package to own its platform dependencies.
+option(ALTIRRA_REQUIRE_SYSTEM_SDL3
+    "Require system SDL3 >= 3.4 (never fall back to FetchContent)" OFF)
+
+if(ALTIRRA_FETCH_SDL3 AND ALTIRRA_REQUIRE_SYSTEM_SDL3)
+    message(FATAL_ERROR
+        "ALTIRRA_FETCH_SDL3 and ALTIRRA_REQUIRE_SYSTEM_SDL3 are mutually "
+        "exclusive. Select either bundled or system SDL3 (or explicitly "
+        "clear a cached choice with -DALTIRRA_FETCH_SDL3=OFF).")
+endif()
 
 # ALTIRRA_STATIC_SDL3 — link SDL3 + SDL3_image statically into the
 # AltirraSDL binary.  Default ON for desktop (Linux/macOS/Windows): the
@@ -158,6 +172,12 @@ endif()
 # the shared library, so we can't honour a request for static with
 # find_package.
 if(ALTIRRA_SDL3 AND ALTIRRA_STATIC_SDL3 AND NOT ALTIRRA_FETCH_SDL3)
+    if(ALTIRRA_REQUIRE_SYSTEM_SDL3)
+        message(FATAL_ERROR
+            "ALTIRRA_REQUIRE_SYSTEM_SDL3=ON requires "
+            "ALTIRRA_STATIC_SDL3=OFF. System packages are not assumed to "
+            "provide the static SDL3 target.")
+    endif()
     message(STATUS "ALTIRRA_STATIC_SDL3=ON implies ALTIRRA_FETCH_SDL3=ON")
     set(ALTIRRA_FETCH_SDL3 ON CACHE BOOL "" FORCE)
 endif()
@@ -338,9 +358,9 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
         endif()
     else()
         # ── SDL3 dependency resolution ──────────────────────────────────
-        # Strategy: prefer a system/vcpkg-installed SDL3 for faster builds;
-        # if none is found, automatically fetch and build from source so
-        # the project works out-of-the-box on Windows, macOS, and Linux.
+        # Strategy: the default static desktop build fetches pinned SDL3.
+        # Shared builds prefer a system/vcpkg SDL3 and fall back to fetching;
+        # ALTIRRA_REQUIRE_SYSTEM_SDL3 makes that system lookup strict.
         #
         # To force a specific SDL3, set SDL3_DIR or CMAKE_PREFIX_PATH:
         #   cmake --preset <preset> -DSDL3_DIR=/path/to/sdl3/cmake
@@ -349,6 +369,26 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
         if(ALTIRRA_FETCH_SDL3)
             message(STATUS "ALTIRRA_FETCH_SDL3=ON — skipping find_package(SDL3)")
             set(SDL3_FOUND FALSE)
+            set(_ALTIRRA_SDL3_FETCH_REASON
+                "Bundled SDL3 selected by ALTIRRA_FETCH_SDL3")
+        elseif(ALTIRRA_REQUIRE_SYSTEM_SDL3)
+            if(ALTIRRA_SDL3)
+                find_package(SDL3 3.4.0 QUIET)
+            else()
+                find_package(SDL3 QUIET)
+            endif()
+            if(NOT SDL3_FOUND)
+                message(FATAL_ERROR
+                    "ALTIRRA_REQUIRE_SYSTEM_SDL3=ON, but a compatible SDL3 "
+                    "package was not found.\n"
+                    "AltirraSDL requires SDL >= 3.4 for SDL_GPU. Install the "
+                    "SDL3 development package (Fedora: SDL3-devel; "
+                    "Debian/Ubuntu: libsdl3-dev when available; macOS: "
+                    "brew install sdl3), then set SDL3_DIR or "
+                    "CMAKE_PREFIX_PATH if it is outside the default prefix.\n"
+                    "Remove ALTIRRA_REQUIRE_SYSTEM_SDL3 or use "
+                    "./build.sh --fetch-sdl3 to return to bundled SDL3.")
+            endif()
         elseif(ALTIRRA_SDL3)
             # SDL_CreateGPURenderer and SDL_GPURenderState are 3.4 APIs.
             find_package(SDL3 3.4.0 QUIET)
@@ -364,6 +404,10 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
         set(ALTIRRA_SDL3_FETCHED FALSE)
 
         if(SDL3_FOUND)
+            set(ALTIRRA_SDL3_PROVIDER "system" CACHE INTERNAL
+                "Resolved SDL3 provider" FORCE)
+            set(ALTIRRA_SDL3_RESOLVED_VERSION "${SDL3_VERSION}" CACHE INTERNAL
+                "Resolved SDL3 version" FORCE)
             # ── System SDL3 found ───────────────────────────────────────
             get_target_property(_sdl3_loc SDL3::SDL3 LOCATION)
             message(STATUS "")
@@ -392,16 +436,25 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
         else()
             # ── Auto-fetch SDL3 from source ─────────────────────────────
             set(ALTIRRA_SDL3_VERSION "release-3.4.14")
+            if(NOT _ALTIRRA_SDL3_FETCH_REASON)
+                set(_ALTIRRA_SDL3_FETCH_REASON
+                    "No compatible system SDL3 was found")
+            endif()
             message(STATUS "")
             message(STATUS "  ┌─ SDL3 ─────────────────────────────────────")
-            message(STATUS "  │ No system SDL3 found.")
+            message(STATUS "  │ ${_ALTIRRA_SDL3_FETCH_REASON}.")
             message(STATUS "  │ Fetching SDL3 ${ALTIRRA_SDL3_VERSION} from GitHub...")
             message(STATUS "  │ (first build downloads ~30 MB; subsequent builds use cache)")
             message(STATUS "  │")
-            message(STATUS "  │ To skip this, install SDL3 and set SDL3_DIR or")
-            message(STATUS "  │ CMAKE_PREFIX_PATH to point to its cmake config.")
+            message(STATUS "  │ To use installed SDL3, set ALTIRRA_STATIC_SDL3=OFF")
+            message(STATUS "  │ and SDL3_DIR/CMAKE_PREFIX_PATH when needed.")
             message(STATUS "  └────────────────────────────────────────────")
             message(STATUS "")
+
+            # SDL 3.4 fails at the first enabled X11 feature whose headers
+            # are missing. Validate the whole set first and report all
+            # missing packages in one distro-aware diagnostic.
+            altirra_validate_sdl3_linux_dependencies()
 
             _altirra_clear_stale_fc(sdl3)
             FetchContent_Declare(
@@ -447,7 +500,34 @@ if(ALTIRRA_SDL3 OR (NOT WIN32 AND NOT ALTIRRA_LIBRETRO_NO_SDL3))
 
             message(STATUS "  SDL3 ${ALTIRRA_SDL3_VERSION} ready (built from source)")
             set(ALTIRRA_SDL3_FETCHED TRUE)
+            set(ALTIRRA_SDL3_PROVIDER "bundled" CACHE INTERNAL
+                "Resolved SDL3 provider" FORCE)
+            set(ALTIRRA_SDL3_RESOLVED_VERSION "${ALTIRRA_SDL3_VERSION}"
+                CACHE INTERNAL "Resolved SDL3 version" FORCE)
         endif()
+
+        if(ALTIRRA_STATIC_SDL3)
+            set(ALTIRRA_SDL3_LINKAGE "static" CACHE INTERNAL
+                "Resolved SDL3 linkage" FORCE)
+        else()
+            set(ALTIRRA_SDL3_LINKAGE "shared" CACHE INTERNAL
+                "Resolved SDL3 linkage" FORCE)
+        endif()
+
+        message(STATUS "")
+        message(STATUS "Altirra SDL3 configuration:")
+        message(STATUS "  Provider: ${ALTIRRA_SDL3_PROVIDER}")
+        message(STATUS "  Version:  ${ALTIRRA_SDL3_RESOLVED_VERSION}")
+        message(STATUS "  Linkage:  ${ALTIRRA_SDL3_LINKAGE}")
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ALTIRRA_SDL3_FETCHED)
+            message(STATUS
+                "  Linux backends: compiled from detected development "
+                "headers; loaded dynamically at runtime")
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            message(STATUS
+                "  Linux backends: supplied by the system SDL3 package")
+        endif()
+        message(STATUS "")
     endif()
 endif()
 
