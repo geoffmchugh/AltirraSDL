@@ -7,7 +7,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-26.05";
     altirrasdl-src = {
-      url = "git+https://github.com/geoffmchugh/AltirraSDL";
+      url = "git+https://github.com/ilmenit/AltirraSDL";
       ref = "main";
       type = "git";
       flake = false;
@@ -87,7 +87,7 @@
               patchShebangs .
               # substituteInPlace makefile --replace-quiet '/sbin/ldconfig' 'ldconfig'
               # substituteInPlace makefile --replace-quiet 'grep -A 10' 'grep -A 100'
-              ./build.sh --clean --release --system-sdl3 --cmake "-DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui -DALTIRRA_BRIDGE_SERVER=ON"
+              ./build.sh --release --system-sdl3 --cmake "-DALTIRRA_STATIC_SDL3=OFF -DALTIRRA_ENABLE_FFMPEG_RECORDING=OFF -DALTIRRA_IMGUI_SOURCE_DIR=$PWD/third_party/imgui -DALTIRRA_BRIDGE_SERVER=ON"
               # cmake --build . -j $NIX_BUILD_CORES;
             '';
             installPhase = ''

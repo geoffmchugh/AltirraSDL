@@ -9,12 +9,12 @@
         "rev": "b3061c7356da2debe5596fc797408821499d37ca",
         "revCount": 593,
         "type": "git",
-        "url": "https://github.com/geoffmchugh/AltirraSDL"
+        "url": "https://github.com/ilmenit/AltirraSDL"
       },
       "original": {
         "ref": "main",
         "type": "git",
-        "url": "https://github.com/geoffmchugh/AltirraSDL"
+        "url": "https://github.com/ilmenit/AltirraSDL"
       }
     },
     "imgui-src": {
